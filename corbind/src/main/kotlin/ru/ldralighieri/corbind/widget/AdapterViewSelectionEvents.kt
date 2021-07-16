@@ -27,11 +27,11 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 sealed class AdapterViewSelectionEvent {
     abstract val view: AdapterView<*>
@@ -49,7 +49,10 @@ data class AdapterViewNothingSelectionEvent(
 ) : AdapterViewSelectionEvent()
 
 /**
- * Perform an action on selection events for [AdapterView].
+ * Perform an action on [selection events][AdapterViewSelectionEvent] for [AdapterView].
+ *
+ * *Warning:* The created actor uses [AdapterView.setOnItemSelectedListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -60,18 +63,21 @@ fun <T : Adapter> AdapterView<T>.selectionEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (AdapterViewSelectionEvent) -> Unit
 ) {
-
-    val events = scope.actor<AdapterViewSelectionEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<AdapterViewSelectionEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    events.offer(initialValue(this))
-    onItemSelectedListener = listener(scope, events::offer)
+    events.trySend(initialValue(this))
+    onItemSelectedListener = listener(scope, events::trySend)
     events.invokeOnClose { onItemSelectedListener = null }
 }
 
 /**
- * Perform an action on selection events for [AdapterView] inside new CoroutineScope.
+ * Perform an action on [selection events][AdapterViewSelectionEvent] for [AdapterView], inside new
+ * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [AdapterView.setOnItemSelectedListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -80,18 +86,38 @@ suspend fun <T : Adapter> AdapterView<T>.selectionEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (AdapterViewSelectionEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<AdapterViewSelectionEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    events.offer(initialValue(this@selectionEvents))
-    onItemSelectedListener = listener(this, events::offer)
-    events.invokeOnClose { onItemSelectedListener = null }
+    selectionEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of selection events for [AdapterView].
+ * Create a channel of [selection events][AdapterViewSelectionEvent] for [AdapterView].
+ *
+ * *Warning:* The created channel uses [AdapterView.setOnItemSelectedListener]. Only one channel can
+ * be used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * launch {
+ *      adapterView.selectionEvents(scope)
+ *          .consumeEach { event ->
+ *              when (event) {
+ *                  is AdapterViewItemSelectionEvent -> { /* handle item selection event */ }
+ *                  is AdapterViewNothingSelectionEvent -> { /* handle nothing selection event */ }
+ *              }
+ *          }
+ * }
+ *
+ * // handle one event
+ * launch {
+ *      adapterView.selectionEvents(scope)
+ *          .filterIsInstance<AdapterViewItemSelectionEvent>()
+ *          .consumeEach { /* handle item selection event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -101,37 +127,68 @@ fun <T : Adapter> AdapterView<T>.selectionEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<AdapterViewSelectionEvent> = corbindReceiveChannel(capacity) {
-    offer(initialValue(this@selectionEvents))
-    onItemSelectedListener = listener(scope, ::offerElement)
+    trySend(initialValue(this@selectionEvents))
+    onItemSelectedListener = listener(scope, ::trySend)
     invokeOnClose { onItemSelectedListener = null }
 }
 
 /**
- * Create a flow of selection events for [AdapterView].
+ * Create a flow of [selection events][AdapterViewSelectionEvent] for [AdapterView].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Warning:* The created flow uses [AdapterView.setOnItemSelectedListener]. Only one flow can be
+ * used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * adapterView.selectionEvents()
+ *      .onEach { event ->
+ *          when (event) {
+ *              is AdapterViewItemSelectionEvent -> { /* handle item selection event */ }
+ *              is AdapterViewNothingSelectionEvent -> { /* handle nothing selection event */ }
+ *          }
+ *      }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // handle one event
+ * adapterView.selectionEvents()
+ *      .filterIsInstance<AdapterViewItemSelectionEvent>()
+ *      .onEach { /* handle item selection event */ }
+ *      .launchIn(lifecycleScope)
+ *
+ * // drop initial value
+ * adapterView.selectionEvents()
+ *      .dropInitialValue()
+ *      .onEach { /* handle selection event */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun <T : Adapter> AdapterView<T>.selectionEvents(): Flow<AdapterViewSelectionEvent> = channelFlow {
-    offer(initialValue(this@selectionEvents))
-    onItemSelectedListener = listener(this, ::offer)
-    awaitClose { onItemSelectedListener = null }
-}
+fun <T : Adapter> AdapterView<T>.selectionEvents(): InitialValueFlow<AdapterViewSelectionEvent> =
+    channelFlow {
+        onItemSelectedListener = listener(this, ::trySend)
+        awaitClose { onItemSelectedListener = null }
+    }.asInitialValueFlow(initialValue(adapterView = this))
 
 @CheckResult
 private fun <T : Adapter> initialValue(adapterView: AdapterView<T>): AdapterViewSelectionEvent {
     return if (adapterView.selectedItemPosition == AdapterView.INVALID_POSITION) {
         AdapterViewNothingSelectionEvent(adapterView)
     } else {
-        AdapterViewItemSelectionEvent(adapterView, adapterView.selectedView,
-                adapterView.selectedItemPosition, adapterView.selectedItemId)
+        AdapterViewItemSelectionEvent(
+            adapterView, adapterView.selectedView,
+            adapterView.selectedItemPosition, adapterView.selectedItemId
+        )
     }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (AdapterViewSelectionEvent) -> Boolean
+    emitter: (AdapterViewSelectionEvent) -> Unit
 ) = object : AdapterView.OnItemSelectedListener {
 
     override fun onItemSelected(parent: AdapterView<*>, view: View?, position: Int, id: Long) {

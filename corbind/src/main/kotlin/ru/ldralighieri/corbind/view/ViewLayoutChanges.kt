@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on [View] layout changes.
@@ -43,18 +42,17 @@ fun View.layoutChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) {
-
-    val events = scope.actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
+    val events = scope.actor<Unit>(Dispatchers.Main.immediate, capacity) {
+        for (ignored in channel) action()
     }
 
-    val listener = listener(scope, events::offer)
+    val listener = listener(scope, events::trySend)
     addOnLayoutChangeListener(listener)
     events.invokeOnClose { removeOnLayoutChangeListener(listener) }
 }
 
 /**
- * Perform an action on [View] layout changes inside new [CoroutineScope].
+ * Perform an action on [View] layout changes, inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -63,18 +61,20 @@ suspend fun View.layoutChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) = coroutineScope {
-
-    val events = actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
-    }
-
-    val listener = listener(this, events::offer)
-    addOnLayoutChangeListener(listener)
-    events.invokeOnClose { removeOnLayoutChangeListener(listener) }
+    layoutChanges(this, capacity, action)
 }
 
 /**
  * Create a channel which emits on [View] layout changes.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.layoutChanges(scope)
+ *          .consumeEach { /* handle layout change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -84,17 +84,23 @@ fun View.layoutChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Unit> = corbindReceiveChannel(capacity) {
-    val listener = listener(scope, ::offerElement)
+    val listener = listener(scope, ::trySend)
     addOnLayoutChangeListener(listener)
     invokeOnClose { removeOnLayoutChangeListener(listener) }
 }
 
 /**
  * Create a flow which emits on [View] layout changes.
+ *
+ * ```
+ * view.layoutChanges()
+ *      .onEach { /* handle layout change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun View.layoutChanges(): Flow<Unit> = channelFlow {
-    val listener = listener(this, ::offer)
+    val listener = listener(this, ::trySend)
     addOnLayoutChangeListener(listener)
     awaitClose { removeOnLayoutChangeListener(listener) }
 }
@@ -102,7 +108,7 @@ fun View.layoutChanges(): Flow<Unit> = channelFlow {
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Unit) -> Boolean
+    emitter: (Unit) -> Unit
 ) = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
     if (scope.isActive) { emitter(Unit) }
 }

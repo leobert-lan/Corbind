@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on scroll state change events on [ViewPager].
@@ -43,18 +42,17 @@ fun ViewPager.pageScrollStateChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) {
-
-    val events = scope.actor<Int>(Dispatchers.Main, capacity) {
+    val events = scope.actor<Int>(Dispatchers.Main.immediate, capacity) {
         for (state in channel) action(state)
     }
 
-    val listener = listener(scope, events::offer)
+    val listener = listener(scope, events::trySend)
     addOnPageChangeListener(listener)
     events.invokeOnClose { removeOnPageChangeListener(listener) }
 }
 
 /**
- * Perform an action on scroll state change events on [ViewPager] inside new [CoroutineScope].
+ * Perform an action on scroll state change events on [ViewPager], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -63,18 +61,20 @@ suspend fun ViewPager.pageScrollStateChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) = coroutineScope {
-
-    val events = actor<Int>(Dispatchers.Main, capacity) {
-        for (state in channel) action(state)
-    }
-
-    val listener = listener(this, events::offer)
-    addOnPageChangeListener(listener)
-    events.invokeOnClose { removeOnPageChangeListener(listener) }
+    pageScrollStateChanges(this, capacity, action)
 }
 
 /**
  * Create a channel of scroll state change events on [ViewPager].
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      viewPager.pageScrollStateChanges(scope)
+ *          .consumeEach { /* handle scroll state change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -84,17 +84,25 @@ fun ViewPager.pageScrollStateChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Int> = corbindReceiveChannel(capacity) {
-    val listener = listener(scope, ::offerElement)
+    val listener = listener(scope, ::trySend)
     addOnPageChangeListener(listener)
     invokeOnClose { removeOnPageChangeListener(listener) }
 }
 
 /**
  * Create a flow of scroll state change events on [ViewPager].
+ *
+ * Example:
+ *
+ * ```
+ * viewPager.pageScrollStateChanges()
+ *      .onEach { /* handle scroll state change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun ViewPager.pageScrollStateChanges(): Flow<Int> = channelFlow {
-    val listener = listener(this, ::offer)
+    val listener = listener(this, ::trySend)
     addOnPageChangeListener(listener)
     awaitClose { removeOnPageChangeListener(listener) }
 }
@@ -102,11 +110,11 @@ fun ViewPager.pageScrollStateChanges(): Flow<Int> = channelFlow {
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Int) -> Boolean
+    emitter: (Int) -> Unit
 ) = object : ViewPager.OnPageChangeListener {
 
-    override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) { }
-    override fun onPageSelected(position: Int) { }
+    override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) = Unit
+    override fun onPageSelected(position: Int) = Unit
 
     override fun onPageScrollStateChanged(state: Int) {
         if (scope.isActive) { emitter(state) }

@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 data class ViewLayoutChangeEvent(
     val view: View,
@@ -44,7 +43,7 @@ data class ViewLayoutChangeEvent(
 )
 
 /**
- * Perform an action on layout-change events for [View].
+ * Perform an action on [layout change events][ViewLayoutChangeEvent] for [View].
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -55,18 +54,18 @@ fun View.layoutChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (ViewLayoutChangeEvent) -> Unit
 ) {
-
-    val events = scope.actor<ViewLayoutChangeEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<ViewLayoutChangeEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    val listener = listener(scope, events::offer)
+    val listener = listener(scope, events::trySend)
     addOnLayoutChangeListener(listener)
     events.invokeOnClose { removeOnLayoutChangeListener(listener) }
 }
 
 /**
- * Perform an action on layout-change events for [View] inside new [CoroutineScope].
+ * Perform an action on [layout change events][ViewLayoutChangeEvent] for [View], inside new
+ * [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -75,18 +74,20 @@ suspend fun View.layoutChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (ViewLayoutChangeEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<ViewLayoutChangeEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    val listener = listener(this, events::offer)
-    addOnLayoutChangeListener(listener)
-    events.invokeOnClose { removeOnLayoutChangeListener(listener) }
+    layoutChangeEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of layout-change events for [View].
+ * Create a channel of [layout change events][ViewLayoutChangeEvent] for [View].
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.layoutChangeEvents(scope)
+ *          .consumeEach { /* handle layout change event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -96,17 +97,25 @@ fun View.layoutChangeEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<ViewLayoutChangeEvent> = corbindReceiveChannel(capacity) {
-    val listener = listener(scope, ::offerElement)
+    val listener = listener(scope, ::trySend)
     addOnLayoutChangeListener(listener)
     invokeOnClose { removeOnLayoutChangeListener(listener) }
 }
 
 /**
- * Create a flow of layout-change events for [View].
+ * Create a flow of [layout change events][ViewLayoutChangeEvent] for [View].
+ *
+ * Example:
+ *
+ * ```
+ * view.layoutChangeEvents()
+ *      .onEach { /* handle layout change event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun View.layoutChangeEvents(): Flow<ViewLayoutChangeEvent> = channelFlow {
-    val listener = listener(this, ::offer)
+    val listener = listener(this, ::trySend)
     addOnLayoutChangeListener(listener)
     awaitClose { removeOnLayoutChangeListener(listener) }
 }
@@ -114,12 +123,14 @@ fun View.layoutChangeEvents(): Flow<ViewLayoutChangeEvent> = channelFlow {
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (ViewLayoutChangeEvent) -> Boolean
+    emitter: (ViewLayoutChangeEvent) -> Unit
 ) = View.OnLayoutChangeListener { v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
-
     if (scope.isActive) {
-        emitter(ViewLayoutChangeEvent(v, left, top, right, bottom, oldLeft, oldTop, oldRight,
-                oldBottom)
+        emitter(
+            ViewLayoutChangeEvent(
+                v, left, top, right, bottom, oldLeft, oldTop, oldRight,
+                oldBottom
+            )
         )
     }
 }

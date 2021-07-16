@@ -25,11 +25,11 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on page selected events on [ViewPager].
@@ -43,19 +43,18 @@ fun ViewPager.pageSelections(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) {
-
-    val events = scope.actor<Int>(Dispatchers.Main, capacity) {
+    val events = scope.actor<Int>(Dispatchers.Main.immediate, capacity) {
         for (position in channel) action(position)
     }
 
-    events.offer(currentItem)
-    val listener = listener(scope, events::offer)
+    events.trySend(currentItem)
+    val listener = listener(scope, events::trySend)
     addOnPageChangeListener(listener)
     events.invokeOnClose { removeOnPageChangeListener(listener) }
 }
 
 /**
- * Perform an action on page selected events on [ViewPager] inside new [CoroutineScope].
+ * Perform an action on page selected events on [ViewPager], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -64,19 +63,22 @@ suspend fun ViewPager.pageSelections(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) = coroutineScope {
-
-    val events = actor<Int>(Dispatchers.Main, capacity) {
-        for (position in channel) action(position)
-    }
-
-    events.offer(currentItem)
-    val listener = listener(this, events::offer)
-    addOnPageChangeListener(listener)
-    events.invokeOnClose { removeOnPageChangeListener(listener) }
+    pageSelections(this, capacity, action)
 }
 
 /**
  * Create a channel of page selected events on [ViewPager].
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      viewPager.pageSelections(scope)
+ *          .consumeEach { /* handle selected page */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -87,8 +89,8 @@ fun ViewPager.pageSelections(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Int> = corbindReceiveChannel(capacity) {
-    offerElement(currentItem)
-    val listener = listener(scope, ::offerElement)
+    trySend(currentItem)
+    val listener = listener(scope, ::trySend)
     addOnPageChangeListener(listener)
     invokeOnClose { removeOnPageChangeListener(listener) }
 }
@@ -96,27 +98,41 @@ fun ViewPager.pageSelections(
 /**
  * Create a flow of page selected events on [ViewPager].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * viewPager.pageSelections()
+ *      .onEach { /* handle selected page */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * viewPager.pageSelections()
+ *      .dropInitialValue()
+ *      .onEach { /* handle selected page */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun ViewPager.pageSelections(): Flow<Int> = channelFlow {
-    offer(currentItem)
-    val listener = listener(this, ::offer)
+fun ViewPager.pageSelections(): InitialValueFlow<Int> = channelFlow {
+    val listener = listener(this, ::trySend)
     addOnPageChangeListener(listener)
     awaitClose { removeOnPageChangeListener(listener) }
-}
+}.asInitialValueFlow(currentItem)
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Int) -> Boolean
+    emitter: (Int) -> Unit
 ) = object : ViewPager.OnPageChangeListener {
 
-    override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) { }
+    override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) = Unit
 
     override fun onPageSelected(position: Int) {
         if (scope.isActive) { emitter(position) }
     }
 
-    override fun onPageScrollStateChanged(state: Int) { }
+    override fun onPageScrollStateChanged(state: Int) = Unit
 }

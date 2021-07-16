@@ -25,11 +25,11 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 sealed class SeekBarChangeEvent {
     abstract val view: SeekBar
@@ -50,7 +50,10 @@ data class SeekBarStopChangeEvent(
 ) : SeekBarChangeEvent()
 
 /**
- * Perform an action on progress change events for [SeekBar].
+ * Perform an action on [change events][SeekBarChangeEvent] for [SeekBar].
+ *
+ * *Warning:* The created actor uses [SeekBar.setOnSeekBarChangeListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -61,18 +64,21 @@ fun SeekBar.changeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (SeekBarChangeEvent) -> Unit
 ) {
-
-    val events = scope.actor<SeekBarChangeEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<SeekBarChangeEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    events.offer(initialValue(this))
-    setOnSeekBarChangeListener(listener(scope, events::offer))
+    events.trySend(initialValue(this))
+    setOnSeekBarChangeListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnSeekBarChangeListener(null) }
 }
 
 /**
- * Perform an action on progress change events for [SeekBar] inside new [CoroutineScope].
+ * Perform an action on [change events][SeekBarChangeEvent] for [SeekBar], inside new
+ * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [SeekBar.setOnSeekBarChangeListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -81,18 +87,39 @@ suspend fun SeekBar.changeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (SeekBarChangeEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<SeekBarChangeEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    events.offer(initialValue(this@changeEvents))
-    setOnSeekBarChangeListener(listener(this, events::offer))
-    events.invokeOnClose { setOnSeekBarChangeListener(null) }
+    changeEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of progress change events for [SeekBar].
+ * Create a channel of [change events][SeekBarChangeEvent] for [SeekBar].
+ *
+ * *Warning:* The created channel uses [SeekBar.setOnSeekBarChangeListener]. Only one channel can be
+ * used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * launch {
+ *      seekBar.changeEvents(scope)
+ *          .consumeEach { event ->
+ *              when (event) {
+ *                  is SeekBarProgressChangeEvent -> { /* handle progress change event */ }
+ *                  is SeekBarStartChangeEvent -> { /* handle start change event */ }
+ *                  is SeekBarStopChangeEvent -> { /* handle stop change event */ }
+ *              }
+ *          }
+ * }
+ *
+ * // handle one event
+ * launch {
+ *      seekBar.changeEvents(scope)
+ *          .filterIsInstance<SeekBarProgressChangeEvent>()
+ *          .consumeEach { /* handle progress change event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -102,31 +129,60 @@ fun SeekBar.changeEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<SeekBarChangeEvent> = corbindReceiveChannel(capacity) {
-    offer(initialValue(this@changeEvents))
-    setOnSeekBarChangeListener(listener(scope, ::offerElement))
+    trySend(initialValue(this@changeEvents))
+    setOnSeekBarChangeListener(listener(scope, ::trySend))
     invokeOnClose { setOnSeekBarChangeListener(null) }
 }
 
 /**
- * Create a flow of progress change events for [SeekBar].
+ * Create a flow of [change events][SeekBarChangeEvent] for [SeekBar].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Warning:* The created flow uses [SeekBar.setOnSeekBarChangeListener]. Only one flow can be used
+ * at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * seekBar.changeEvents()
+ *      .onEach { event ->
+ *          when (event) {
+ *              is SeekBarProgressChangeEvent -> { /* handle progress change event */ }
+ *              is SeekBarStartChangeEvent -> { /* handle start change event */ }
+ *              is SeekBarStopChangeEvent -> { /* handle stop change event */ }
+ *          }
+ *      }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // handle one event
+ * seekBar.changeEvents()
+ *      .filterIsInstance<SeekBarProgressChangeEvent>()
+ *      .onEach { /* handle progress change event */ }
+ *      .launchIn(lifecycleScope)
+ *
+ * // drop one event
+ * seekBar.changeEvents()
+ *      .dropInitialValue()
+ *      .onEach { /* handle event */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun SeekBar.changeEvents(): Flow<SeekBarChangeEvent> = channelFlow {
-    offer(initialValue(this@changeEvents))
-    setOnSeekBarChangeListener(listener(this, ::offer))
+fun SeekBar.changeEvents(): InitialValueFlow<SeekBarChangeEvent> = channelFlow {
+    setOnSeekBarChangeListener(listener(this, ::trySend))
     awaitClose { setOnSeekBarChangeListener(null) }
-}
+}.asInitialValueFlow(initialValue(seekBar = this))
 
 @CheckResult
 private fun initialValue(seekBar: SeekBar): SeekBarChangeEvent =
-        SeekBarProgressChangeEvent(seekBar, seekBar.progress, false)
+    SeekBarProgressChangeEvent(seekBar, seekBar.progress, false)
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (SeekBarChangeEvent) -> Boolean
+    emitter: (SeekBarChangeEvent) -> Unit
 ) = object : SeekBar.OnSeekBarChangeListener {
 
     override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {

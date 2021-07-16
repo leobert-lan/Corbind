@@ -29,14 +29,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
 import ru.ldralighieri.corbind.internal.AlwaysTrue
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
- * Perform an action on `view` long-click events.
+ * Perform an action on [View] long click events.
  *
- * *Warning:* The created actor uses [View.setOnLongClickListener] to emmit long clicks. Only one
- * actor can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnLongClickListener]. Only one actor can be used at a
+ * time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -50,20 +49,19 @@ fun View.longClicks(
     handled: () -> Boolean = AlwaysTrue,
     action: suspend () -> Unit
 ) {
-
-    val events = scope.actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
+    val events = scope.actor<Unit>(Dispatchers.Main.immediate, capacity) {
+        for (ignored in channel) action()
     }
 
-    setOnLongClickListener(listener(scope, handled, events::offer))
+    setOnLongClickListener(listener(scope, handled, events::trySend))
     events.invokeOnClose { setOnLongClickListener(null) }
 }
 
 /**
- * Perform an action on `view` long-click events inside new [CoroutineScope].
+ * Perform an action on [View] long click events, inside new [CoroutineScope].
  *
- * *Warning:* The created actor uses [View.setOnLongClickListener] to emmit long clicks. Only one
- * actor can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnLongClickListener]. Only one actor can be used at a
+ * time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
@@ -75,20 +73,23 @@ suspend fun View.longClicks(
     handled: () -> Boolean = AlwaysTrue,
     action: suspend () -> Unit
 ) = coroutineScope {
-
-    val events = actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
-    }
-
-    setOnLongClickListener(listener(this, handled, events::offer))
-    events.invokeOnClose { setOnLongClickListener(null) }
+    longClicks(this, capacity, handled, action)
 }
 
 /**
- * Create a channel which emits on `view` long-click events.
+ * Create a channel which emits on [View] long click events.
  *
- * *Warning:* The created channel uses [View.setOnLongClickListener] to emmit long clicks. Only
- * one channel can be used for a view at a time.
+ * *Warning:* The created channel uses [View.setOnLongClickListener]. Only one channel can be used
+ * at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.longClicks(scope)
+ *          .consumeEach { /* handle long click */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -101,15 +102,23 @@ fun View.longClicks(
     capacity: Int = Channel.RENDEZVOUS,
     handled: () -> Boolean = AlwaysTrue
 ): ReceiveChannel<Unit> = corbindReceiveChannel(capacity) {
-    setOnLongClickListener(listener(scope, handled, ::offerElement))
+    setOnLongClickListener(listener(scope, handled, ::trySend))
     invokeOnClose { setOnLongClickListener(null) }
 }
 
 /**
- * Create a flow which emits on `view` long-click events.
+ * Create a flow which emits on [View] long click events.
  *
- * *Warning:* The created flow uses [View.setOnLongClickListener] to emmit
- * long clicks. Only one flow can be used for a view at a time.
+ * *Warning:* The created flow uses [View.setOnLongClickListener]. Only one flow can be used at a
+ * time.
+ *
+ * Example:
+ *
+ * ```
+ * view.longClicks()
+ *      .onEach { /* handle long click */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  *
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
  * [View.OnLongClickListener]
@@ -118,7 +127,7 @@ fun View.longClicks(
 fun View.longClicks(
     handled: () -> Boolean = AlwaysTrue
 ): Flow<Unit> = channelFlow {
-    setOnLongClickListener(listener(this, handled, ::offer))
+    setOnLongClickListener(listener(this, handled, ::trySend))
     awaitClose { setOnLongClickListener(null) }
 }
 
@@ -126,14 +135,11 @@ fun View.longClicks(
 private fun listener(
     scope: CoroutineScope,
     handled: () -> Boolean,
-    emitter: (Unit) -> Boolean
+    emitter: (Unit) -> Unit
 ) = View.OnLongClickListener {
-
-    if (scope.isActive) {
-        if (handled()) {
-            emitter(Unit)
-            return@OnLongClickListener true
-        }
+    if (scope.isActive && handled()) {
+        emitter(Unit)
+        return@OnLongClickListener true
     }
     return@OnLongClickListener false
 }

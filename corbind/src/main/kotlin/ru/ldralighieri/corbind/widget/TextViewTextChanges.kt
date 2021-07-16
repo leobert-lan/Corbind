@@ -27,11 +27,11 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on character sequences for text changes on [TextView].
@@ -45,19 +45,18 @@ fun TextView.textChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (CharSequence) -> Unit
 ) {
-
-    val events = scope.actor<CharSequence>(Dispatchers.Main, capacity) {
+    val events = scope.actor<CharSequence>(Dispatchers.Main.immediate, capacity) {
         for (chars in channel) action(chars)
     }
 
-    events.offer(text)
-    val listener = listener(scope, events::offer)
+    events.trySend(text)
+    val listener = listener(scope, events::trySend)
     addTextChangedListener(listener)
     events.invokeOnClose { removeTextChangedListener(listener) }
 }
 
 /**
- * Perform an action on character sequences for text changes on [TextView] inside new
+ * Perform an action on character sequences for text changes on [TextView], inside new
  * [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -67,19 +66,22 @@ suspend fun TextView.textChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (CharSequence) -> Unit
 ) = coroutineScope {
-
-    val events = actor<CharSequence>(Dispatchers.Main, capacity) {
-        for (chars in channel) action(chars)
-    }
-
-    events.offer(text)
-    val listener = listener(this, events::offer)
-    addTextChangedListener(listener)
-    events.invokeOnClose { removeTextChangedListener(listener) }
+    textChanges(this, capacity, action)
 }
 
 /**
  * Create a channel of character sequences for text changes on [TextView].
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      textView.textChanges(scope)
+ *          .consumeEach { /* handle text changes */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -89,8 +91,8 @@ fun TextView.textChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<CharSequence> = corbindReceiveChannel(capacity) {
-    offerElement(text)
-    val listener = listener(scope, ::offerElement)
+    trySend(text)
+    val listener = listener(scope, ::trySend)
     addTextChangedListener(listener)
     invokeOnClose { removeTextChangedListener(listener) }
 }
@@ -98,27 +100,41 @@ fun TextView.textChanges(
 /**
  * Create a flow of character sequences for text changes on [TextView].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * textView.textChanges()
+ *      .onEach { /* handle text changes */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * textView.textChanges()
+ *      .dropInitialValue()
+ *      .onEach { /* handle text changes */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun TextView.textChanges(): Flow<CharSequence> = channelFlow {
-    offer(text)
-    val listener = listener(this, ::offer)
+fun TextView.textChanges(): InitialValueFlow<CharSequence> = channelFlow {
+    val listener = listener(this, ::trySend)
     addTextChangedListener(listener)
     awaitClose { removeTextChangedListener(listener) }
-}
+}.asInitialValueFlow(text)
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (CharSequence) -> Boolean
+    emitter: (CharSequence) -> Unit
 ) = object : TextWatcher {
 
-    override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) { }
+    override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) = Unit
 
     override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {
         if (scope.isActive) { emitter(s) }
     }
 
-    override fun afterTextChanged(s: Editable) { }
+    override fun afterTextChanged(s: Editable) = Unit
 }

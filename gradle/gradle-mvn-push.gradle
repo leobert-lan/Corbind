@@ -18,7 +18,7 @@ apply plugin: 'maven'
 apply plugin: 'signing'
 
 def isReleaseBuild() {
-    return VERSION_NAME.contains("SNAPSHOT") == false
+    return !VERSION_NAME.contains("SNAPSHOT")
 }
 
 def getReleaseRepositoryUrl() {
@@ -97,23 +97,91 @@ afterEvaluate { project ->
         if (!project.plugins.hasPlugin('kotlin-android')) {
             source = android.sourceSets.main.java.srcDirs
         }
+
         classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
+
         exclude '**/internal/*'
         include '**/*.java'
+
+        options.links("http://docs.oracle.com/javase/7/docs/api/")
+        options.linksOffline "https://developer.android.com/reference",
+                "${project.android.sdkDirectory}/docs/reference"
 
         if (JavaVersion.current().isJava8Compatible()) {
             options.addStringOption('Xdoclint:none', '-quiet')
         }
-    }
 
-    task androidJavadocsJar(type: Jar, dependsOn: androidJavadocs) {
-        classifier = 'javadoc'
-        from androidJavadocs.destinationDir
+
+        def androidJavadocsJar = project.tasks.register("androidJavadocsJar", Jar.class) {
+            classifier = "javadoc"
+        }
+
+        if (plugins.hasPlugin('kotlin-android')) {
+            def dokkaOutput = "${project.docsDir}/dokka"
+
+            project.plugins.apply('org.jetbrains.dokka')
+            def path = new File(project.projectDir, "")
+            project.dokka {
+                outputFormat = "html"
+                outputDirectory = dokkaOutput
+
+                configuration {
+                    reportUndocumented = false
+                    skipDeprecated = true
+                    skipEmptyPackages = true
+
+                    sourceLink {
+                        path = "src/main/kotlin"
+                        url = "https://github.com/LDRAlighieri/Corbind/blob/master/"
+                        lineSuffix = "#L"
+                    }
+
+                    jdkVersion = 8
+
+                    externalDocumentationLink {
+                        url = new URL("https://developer.android.com/reference/")
+                        packageListUrl = new URL("https://developer.android.com/reference/package-list")
+                    }
+
+                    externalDocumentationLink {
+                        url = new URL("https://developer.android.com/reference/")
+                        packageListUrl = new URL("https://developer.android.com/reference/androidx/package-list")
+                    }
+
+                    externalDocumentationLink {
+                        url = new URL("https://developer.android.com/reference/")
+                        packageListUrl = new URL("https://developer.android.com/reference/com/google/android/material/package-list")
+                    }
+
+//                    externalDocumentationLink {
+//                        url = new URL("https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/")
+//                        packageListUrl = new URL("https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/package-list")
+//                    }
+//
+//                    externalDocumentationLink {
+//                        url = new URL("https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-android/")
+//                        packageListUrl = new URL("https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-android/package-list")
+//                    }
+                }
+
+            }
+
+            androidJavadocsJar.configure {
+                dependsOn "dokka"
+                from dokkaOutput
+            }
+
+        } else {
+            androidJavadocsJar.configure {
+                dependsOn "javadoc"
+                from project.androidJavadocs.destinationDir
+            }
+        }
     }
 
     task androidSourcesJar(type: Jar) {
-        classifier = 'sources'
-        from android.sourceSets.main.java.sourceFiles
+        archiveClassifier.set("sources")
+        from project.android.sourceSets.main.java.srcDirs
     }
 
     artifacts {

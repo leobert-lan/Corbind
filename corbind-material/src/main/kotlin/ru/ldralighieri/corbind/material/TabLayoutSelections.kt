@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on the selected tab in [TabLayout].
@@ -43,19 +42,18 @@ fun TabLayout.selections(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (TabLayout.Tab) -> Unit
 ) {
-
-    val events = scope.actor<TabLayout.Tab>(Dispatchers.Main, capacity) {
+    val events = scope.actor<TabLayout.Tab>(Dispatchers.Main.immediate, capacity) {
         for (tab in channel) action(tab)
     }
 
-    setInitialValue(this, events::offer)
-    val listener = listener(scope, events::offer)
+    setInitialValue(this, events::trySend)
+    val listener = listener(scope, events::trySend)
     addOnTabSelectedListener(listener)
     events.invokeOnClose { removeOnTabSelectedListener(listener) }
 }
 
 /**
- * Perform an action on the selected tab in [TabLayout] inside new [CoroutineScope].
+ * Perform an action on the selected tab in [TabLayout], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -64,19 +62,22 @@ suspend fun TabLayout.selections(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (TabLayout.Tab) -> Unit
 ) = coroutineScope {
-
-    val events = actor<TabLayout.Tab>(Dispatchers.Main, capacity) {
-        for (tab in channel) action(tab)
-    }
-
-    setInitialValue(this@selections, events::offer)
-    val listener = listener(this, events::offer)
-    addOnTabSelectedListener(listener)
-    events.invokeOnClose { removeOnTabSelectedListener(listener) }
+    selections(this, capacity, action)
 }
 
 /**
  * Create a channel which emits the selected tab in [TabLayout].
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      tabLayout.selections(scope)
+ *          .consumeEach { /* handle selected tab */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -86,8 +87,8 @@ fun TabLayout.selections(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<TabLayout.Tab> = corbindReceiveChannel(capacity) {
-    setInitialValue(this@selections, ::offerElement)
-    val listener = listener(scope, ::offerElement)
+    setInitialValue(this@selections, ::trySend)
+    val listener = listener(scope, ::trySend)
     addOnTabSelectedListener(listener)
     invokeOnClose { removeOnTabSelectedListener(listener) }
 }
@@ -95,19 +96,34 @@ fun TabLayout.selections(
 /**
  * Create a flow which emits the selected tab in [TabLayout].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * tabLayout.selections()
+ *      .onEach { /* handle selected tab */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * tabLayout.selections()
+ *      .drop(1)
+ *      .onEach { /* handle selected tab */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun TabLayout.selections(): Flow<TabLayout.Tab> = channelFlow {
-    setInitialValue(this@selections, ::offer)
-    val listener = listener(this, ::offer)
+    setInitialValue(this@selections, ::trySend)
+    val listener = listener(this, ::trySend)
     addOnTabSelectedListener(listener)
     awaitClose { removeOnTabSelectedListener(listener) }
 }
 
 private fun setInitialValue(
     tabLayout: TabLayout,
-    emitter: (TabLayout.Tab) -> Boolean
+    emitter: (TabLayout.Tab) -> Unit
 ) {
     val index = tabLayout.selectedTabPosition
     if (index != -1) { emitter(tabLayout.getTabAt(index)!!) }
@@ -116,13 +132,13 @@ private fun setInitialValue(
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (TabLayout.Tab) -> Boolean
-) = object : TabLayout.BaseOnTabSelectedListener<TabLayout.Tab> {
+    emitter: (TabLayout.Tab) -> Unit
+) = object : TabLayout.OnTabSelectedListener {
 
     override fun onTabSelected(tab: TabLayout.Tab) {
         if (scope.isActive) { emitter(tab) }
     }
 
-    override fun onTabReselected(tab: TabLayout.Tab) { }
-    override fun onTabUnselected(tab: TabLayout.Tab) { }
+    override fun onTabReselected(tab: TabLayout.Tab) = Unit
+    override fun onTabUnselected(tab: TabLayout.Tab) = Unit
 }

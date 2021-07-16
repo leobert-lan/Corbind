@@ -19,6 +19,8 @@ package ru.ldralighieri.corbind.material
 import android.view.MenuItem
 import androidx.annotation.CheckResult
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.navigation.NavigationBarView
+import com.google.android.material.navigationrail.NavigationRailView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -29,98 +31,98 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
- * Perform an action on the selected item in [BottomNavigationView].
+ * Perform an action on the reselected item in [NavigationBarView].
+ *
+ * *Warning:* The created actor uses [NavigationBarView.setOnItemReselectedListener]. Only one actor
+ * can be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
  */
-fun BottomNavigationView.itemSelections(
+fun NavigationBarView.itemReselections(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (MenuItem) -> Unit
 ) {
-
-    val events = scope.actor<MenuItem>(Dispatchers.Main, capacity) {
+    val events = scope.actor<MenuItem>(Dispatchers.Main.immediate, capacity) {
         for (item in channel) action(item)
     }
 
-    setInitialValue(this, events::offer)
-    setOnNavigationItemSelectedListener(listener(scope, events::offer))
-    events.invokeOnClose { setOnNavigationItemSelectedListener(null) }
+    setOnItemReselectedListener(listener(scope, events::trySend))
+    events.invokeOnClose { setOnItemReselectedListener(null) }
 }
 
 /**
- * Perform an action on the selected item in [BottomNavigationView] inside new [CoroutineScope].
+ * Perform an action on the reselected item in [NavigationBarView], inside new [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [NavigationBarView.setOnItemReselectedListener]. Only one actor
+ * can be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
  */
-suspend fun BottomNavigationView.itemSelections(
+suspend fun NavigationBarView.itemReselections(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (MenuItem) -> Unit
 ) = coroutineScope {
-
-    val events = actor<MenuItem>(Dispatchers.Main, capacity) {
-        for (item in channel) action(item)
-    }
-
-    setInitialValue(this@itemSelections, events::offer)
-    setOnNavigationItemSelectedListener(listener(this, events::offer))
-    events.invokeOnClose { setOnNavigationItemSelectedListener(null) }
+    itemReselections(this, capacity, action)
 }
 
 /**
- * Create a channel which emits the selected item in [BottomNavigationView].
+ * Create a channel which emits the reselected item in [NavigationBarView].
+ *
+ * *Warning:* The created channel uses [NavigationBarView.setOnItemReselectedListener]. Only one
+ * channel can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      anyNavigationBarView.itemReselections(scope)
+ *          .consumeEach { /* handle reselected item */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  */
 @CheckResult
-fun BottomNavigationView.itemSelections(
+fun NavigationBarView.itemReselections(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<MenuItem> = corbindReceiveChannel(capacity) {
-    setInitialValue(this@itemSelections, ::offerElement)
-    setOnNavigationItemSelectedListener(listener(scope, ::offerElement))
-    invokeOnClose { setOnNavigationItemSelectedListener(null) }
+    setOnItemReselectedListener(listener(scope, ::trySend))
+    invokeOnClose { setOnItemReselectedListener(null) }
 }
 
 /**
- * Create a flow which emits the selected item in [BottomNavigationView].
+ * Create a flow which emits the reselected item in [NavigationBarView].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Warning:* The created flow uses [NavigationBarView.setOnItemReselectedListener]. Only one flow
+ * can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * anyNavigationBarView.itemReselections()
+ *      .onEach { /* handle reselected item */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
-fun BottomNavigationView.itemSelections(): Flow<MenuItem> = channelFlow {
-    setInitialValue(this@itemSelections, ::offer)
-    setOnNavigationItemSelectedListener(listener(this, ::offer))
-    awaitClose { setOnNavigationItemSelectedListener(null) }
-}
-
-private fun setInitialValue(
-    bottomNavigationView: BottomNavigationView,
-    emitter: (MenuItem) -> Boolean
-) {
-    val menu = bottomNavigationView.menu
-    for (i in 0 until menu.size()) {
-        val item = menu.getItem(i)
-        if (item.isChecked) {
-            emitter(item)
-            break
-        }
-    }
+fun NavigationBarView.itemReselections(): Flow<MenuItem> = channelFlow {
+    setOnItemReselectedListener(listener(this, ::trySend))
+    awaitClose { setOnItemReselectedListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (MenuItem) -> Boolean
-) = BottomNavigationView.OnNavigationItemSelectedListener {
+    emitter: (MenuItem) -> Unit
+) = NavigationBarView.OnItemReselectedListener {
     if (scope.isActive) { emitter(it) }
-    return@OnNavigationItemSelectedListener true
 }

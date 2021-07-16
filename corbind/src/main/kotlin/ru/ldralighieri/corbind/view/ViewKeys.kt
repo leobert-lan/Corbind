@@ -30,14 +30,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
 import ru.ldralighieri.corbind.internal.AlwaysTrue
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on key events for [View].
  *
- * *Warning:* The created actor uses [View.setOnKeyListener] to emmit key events. Only one actor
- * can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnKeyListener]. Only one actor can be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -51,20 +49,18 @@ fun View.keys(
     handled: (KeyEvent) -> Boolean = AlwaysTrue,
     action: suspend (KeyEvent) -> Unit
 ) {
-
-    val events = scope.actor<KeyEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<KeyEvent>(Dispatchers.Main.immediate, capacity) {
         for (key in channel) action(key)
     }
 
-    setOnKeyListener(listener(scope, handled, events::offer))
+    setOnKeyListener(listener(scope, handled, events::trySend))
     events.invokeOnClose { setOnKeyListener(null) }
 }
 
 /**
- * Perform an action on key events for [View] inside new [CoroutineScope].
+ * Perform an action on key events for [View], inside new [CoroutineScope].
  *
- * *Warning:* The created actor uses [View.setOnKeyListener] to emmit key events. Only one actor
- * can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnKeyListener]. Only one actor can be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
@@ -76,20 +72,23 @@ suspend fun View.keys(
     handled: (KeyEvent) -> Boolean = AlwaysTrue,
     action: suspend (KeyEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<KeyEvent>(Dispatchers.Main, capacity) {
-        for (key in channel) action(key)
-    }
-
-    setOnKeyListener(listener(this, handled, events::offer))
-    events.invokeOnClose { setOnKeyListener(null) }
+    keys(this, capacity, handled, action)
 }
 
 /**
  * Create a channel of key events for [View].
  *
- * *Warning:* The created channel uses [View.setOnKeyListener] to emmit key events. Only one
- * channel can be used for a view at a time.
+ * *Warning:* The created channel uses [View.setOnKeyListener]. Only one channel can be used at a
+ * time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.keys(scope)
+ *          .consumeEach { /* handle key */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -102,24 +101,29 @@ fun View.keys(
     capacity: Int = Channel.RENDEZVOUS,
     handled: (KeyEvent) -> Boolean = AlwaysTrue
 ): ReceiveChannel<KeyEvent> = corbindReceiveChannel(capacity) {
-    setOnKeyListener(listener(scope, handled, ::offerElement))
+    setOnKeyListener(listener(scope, handled, ::trySend))
     invokeOnClose { setOnKeyListener(null) }
 }
 
 /**
  * Create a flow of key events for [View].
  *
- * *Warning:* The created flow uses [View.setOnKeyListener] to emmit key events. Only one flow
- * can be used for a view at a time.
+ * *Warning:* The created flow uses [View.setOnKeyListener]. Only one flow can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * view.keys()
+ *      .onEach { /* handle key */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  *
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
  * [View.OnKeyListener]
  */
 @CheckResult
-fun View.keys(
-    handled: (KeyEvent) -> Boolean = AlwaysTrue
-): Flow<KeyEvent> = channelFlow {
-    setOnKeyListener(listener(this, handled, ::offer))
+fun View.keys(handled: (KeyEvent) -> Boolean = AlwaysTrue): Flow<KeyEvent> = channelFlow {
+    setOnKeyListener(listener(this, handled, ::trySend))
     awaitClose { setOnKeyListener(null) }
 }
 
@@ -127,14 +131,11 @@ fun View.keys(
 private fun listener(
     scope: CoroutineScope,
     handled: (KeyEvent) -> Boolean,
-    emitter: (KeyEvent) -> Boolean
+    emitter: (KeyEvent) -> Unit
 ) = View.OnKeyListener { _, _, keyEvent ->
-
-    if (scope.isActive) {
-        if (handled(keyEvent)) {
-            emitter(keyEvent)
-            return@OnKeyListener true
-        }
+    if (scope.isActive && handled(keyEvent)) {
+        emitter(keyEvent)
+        return@OnKeyListener true
     }
     return@OnKeyListener false
 }

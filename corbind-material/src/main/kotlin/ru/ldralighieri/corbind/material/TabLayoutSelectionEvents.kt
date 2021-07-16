@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 sealed class TabLayoutSelectionEvent {
     abstract val view: TabLayout
@@ -52,7 +51,8 @@ data class TabLayoutSelectionUnselectedEvent(
 ) : TabLayoutSelectionEvent()
 
 /**
- * Perform an action on selection, reselection, and unselection events for the tabs in [TabLayout].
+ * Perform an action on selection, reselection, and unselection [events][TabLayoutSelectionEvent]
+ * for the tabs in [TabLayout].
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -63,20 +63,19 @@ fun TabLayout.selectionEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (TabLayoutSelectionEvent) -> Unit
 ) {
-
-    val events = scope.actor<TabLayoutSelectionEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<TabLayoutSelectionEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    setInitialValue(this, events::offer)
-    val listener = listener(scope = scope, tabLayout = this, emitter = events::offer)
+    setInitialValue(this, events::trySend)
+    val listener = listener(scope, this, events::trySend)
     addOnTabSelectedListener(listener)
     events.invokeOnClose { removeOnTabSelectedListener(listener) }
 }
 
 /**
- * Perform an action on selection, reselection, and unselection events for the tabs in [TabLayout]
- * inside new [CoroutineScope].
+ * Perform an action on selection, reselection, and unselection [events][TabLayoutSelectionEvent]
+ * for the tabs in [TabLayout], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -85,20 +84,37 @@ suspend fun TabLayout.selectionEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (TabLayoutSelectionEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<TabLayoutSelectionEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    setInitialValue(this@selectionEvents, events::offer)
-    val listener = listener(scope = this, tabLayout = this@selectionEvents, emitter = events::offer)
-    addOnTabSelectedListener(listener)
-    events.invokeOnClose { removeOnTabSelectedListener(listener) }
+    selectionEvents(this, capacity, action)
 }
 
 /**
- * Create a channel which emits selection, reselection, and unselection events for the tabs in
- * [TabLayout].
+ * Create a channel which emits selection, reselection, and unselection
+ * [events][TabLayoutSelectionEvent] for the tabs in [TabLayout].
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * launch {
+ *      tabLayout.selectionEvents(scope)
+ *          .consumeEach { event ->
+ *              when (event) {
+ *                  is TabLayoutSelectionSelectedEvent -> { /* handle select event */ }
+ *                  is TabLayoutSelectionReselectedEvent -> { /* handle reselect event */ }
+ *                  is TabLayoutSelectionUnselectedEvent -> { /* handle unselect event */ }
+ *              }
+ *          }
+ * }
+ *
+ * // handle one event
+ * launch {
+ *      tabLayout.selectionEvents(scope)
+ *          .filterIsInstance<TabLayoutSelectionSelectedEvent>()
+ *          .consumeEach { /* handle event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -108,29 +124,56 @@ fun TabLayout.selectionEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<TabLayoutSelectionEvent> = corbindReceiveChannel(capacity) {
-    setInitialValue(this@selectionEvents, ::offerElement)
-    val listener = listener(scope, this@selectionEvents, ::offerElement)
+    setInitialValue(this@selectionEvents, ::trySend)
+    val listener = listener(scope, this@selectionEvents, ::trySend)
     addOnTabSelectedListener(listener)
     invokeOnClose { removeOnTabSelectedListener(listener) }
 }
 
 /**
- * Create a flow which emits selection, reselection, and unselection events for the tabs in
- * [TabLayout].
+ * Create a flow which emits selection, reselection, and unselection
+ * [events][TabLayoutSelectionEvent] for the tabs in [TabLayout].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * tabLayout.selectionEvents()
+ *      .onEach { event ->
+ *          when (event) {
+ *              is TabLayoutSelectionSelectedEvent -> { /* handle select event */ }
+ *              is TabLayoutSelectionReselectedEvent -> { /* handle reselect event */ }
+ *              is TabLayoutSelectionUnselectedEvent -> { /* handle unselect event */ }
+ *          }
+ *      }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // handle one event
+ * tabLayout.selectionEvents()
+ *      .filterIsInstance<TabLayoutSelectionSelectedEvent>()
+ *      .onEach { /* handle select event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * tabLayout.selectionEvents()
+ *      .drop(1)
+ *      .onEach { /* handle event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun TabLayout.selectionEvents(): Flow<TabLayoutSelectionEvent> = channelFlow {
-    setInitialValue(this@selectionEvents, ::offer)
-    val listener = listener(this, this@selectionEvents, ::offer)
+    setInitialValue(this@selectionEvents, ::trySend)
+    val listener = listener(this, this@selectionEvents, ::trySend)
     addOnTabSelectedListener(listener)
     awaitClose { removeOnTabSelectedListener(listener) }
 }
 
 private fun setInitialValue(
     tabLayout: TabLayout,
-    emitter: (TabLayoutSelectionEvent) -> Boolean
+    emitter: (TabLayoutSelectionEvent) -> Unit
 ) {
     val index = tabLayout.selectedTabPosition
     if (index != -1) {
@@ -142,7 +185,7 @@ private fun setInitialValue(
 private fun listener(
     scope: CoroutineScope,
     tabLayout: TabLayout,
-    emitter: (TabLayoutSelectionEvent) -> Boolean
+    emitter: (TabLayoutSelectionEvent) -> Unit
 ) = object : TabLayout.OnTabSelectedListener {
 
     override fun onTabSelected(tab: TabLayout.Tab) {

@@ -31,11 +31,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on the clicked item in [Toolbar] menu.
+ *
+ * *Warning:* The created actor uses [Toolbar.setOnMenuItemClickListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -47,17 +49,19 @@ fun Toolbar.itemClicks(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (MenuItem) -> Unit
 ) {
-
-    val events = scope.actor<MenuItem>(Dispatchers.Main, capacity) {
+    val events = scope.actor<MenuItem>(Dispatchers.Main.immediate, capacity) {
         for (item in channel) action(item)
     }
 
-    setOnMenuItemClickListener(listener(scope, events::offer))
+    setOnMenuItemClickListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnMenuItemClickListener(null) }
 }
 
 /**
- * Perform an action on the clicked item in [Toolbar] menu inside new [CoroutineScope].
+ * Perform an action on the clicked item in [Toolbar] menu, inside new [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [Toolbar.setOnMenuItemClickListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -67,17 +71,23 @@ suspend fun Toolbar.itemClicks(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (MenuItem) -> Unit
 ) = coroutineScope {
-
-    val events = actor<MenuItem>(Dispatchers.Main, capacity) {
-        for (item in channel) action(item)
-    }
-
-    setOnMenuItemClickListener(listener(this, events::offer))
-    events.invokeOnClose { setOnMenuItemClickListener(null) }
+    itemClicks(this, capacity, action)
 }
 
 /**
  * Create a channel which emits the clicked item in [Toolbar] menu.
+ *
+ * *Warning:* The created channel uses [Toolbar.setOnMenuItemClickListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      toolbar.itemClicks(scope)
+ *          .consumeEach { /* handle clicked item */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -88,26 +98,36 @@ fun Toolbar.itemClicks(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<MenuItem> = corbindReceiveChannel(capacity) {
-    setOnMenuItemClickListener(listener(scope, ::offerElement))
+    setOnMenuItemClickListener(listener(scope, ::trySend))
     invokeOnClose { setOnMenuItemClickListener(null) }
 }
 
 /**
  * Create a flow which emits the clicked item in [Toolbar] menu.
+ *
+ * *Warning:* The created flow uses [Toolbar.setOnMenuItemClickListener]. Only one flow can be used
+ * at a time.
+ *
+ * Example:
+ *
+ * ```
+ * toolbar.itemClicks()
+ *      .onEach { /* handle clicked item */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
 @CheckResult
 fun Toolbar.itemClicks(): Flow<MenuItem> = channelFlow {
-    setOnMenuItemClickListener(listener(this, ::offer))
+    setOnMenuItemClickListener(listener(this, ::trySend))
     awaitClose { setOnMenuItemClickListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (MenuItem) -> Boolean
+    emitter: (MenuItem) -> Unit
 ) = Toolbar.OnMenuItemClickListener {
-
     if (scope.isActive) {
         emitter(it)
         return@OnMenuItemClickListener true

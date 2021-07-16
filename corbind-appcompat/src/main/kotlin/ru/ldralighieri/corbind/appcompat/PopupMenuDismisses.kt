@@ -28,14 +28,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on [PopupMenu] dismiss events.
  *
- * *Warning:* The created actor uses [PopupMenu.setOnDismissListener] to emmit dismiss change.
- * Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [PopupMenu.setOnDismissListener]. Only one actor can be used
+ * at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -46,20 +45,19 @@ fun PopupMenu.dismisses(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) {
-
-    val events = scope.actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
+    val events = scope.actor<Unit>(Dispatchers.Main.immediate, capacity) {
+        for (ignored in channel) action()
     }
 
-    setOnDismissListener(listener(scope, events::offer))
+    setOnDismissListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnMenuItemClickListener(null) }
 }
 
 /**
- * Perform an action on [PopupMenu] dismiss events inside new [CoroutineScope].
+ * Perform an action on [PopupMenu] dismiss events, inside new [CoroutineScope].
  *
- * *Warning:* The created actor uses [PopupMenu.setOnDismissListener] to emmit dismiss change.
- * Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [PopupMenu.setOnDismissListener]. Only one actor can be used
+ * for a view at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -68,20 +66,23 @@ suspend fun PopupMenu.dismisses(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) = coroutineScope {
-
-    val events = actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
-    }
-
-    setOnDismissListener(listener(this, events::offer))
-    events.invokeOnClose { setOnMenuItemClickListener(null) }
+    dismisses(this, capacity, action)
 }
 
 /**
  * Create a channel which emits on [PopupMenu] dismiss events.
  *
- * *Warning:* The created channel uses [PopupMenu.setOnDismissListener] to emmit dismiss change.
- * Only one channel can be used for a view at a time.
+ * *Warning:* The created channel uses [PopupMenu.setOnDismissListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      popupMenu.dismisses(scope)
+ *          .consumeEach { /* handle popup menu dismiss */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -91,26 +92,34 @@ fun PopupMenu.dismisses(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Unit> = corbindReceiveChannel(capacity) {
-    setOnDismissListener(listener(scope, ::offerElement))
+    setOnDismissListener(listener(scope, ::trySend))
     invokeOnClose { setOnMenuItemClickListener(null) }
 }
 
 /**
  * Create a flow which emits on [PopupMenu] dismiss events.
  *
- * *Warning:* The created flow uses [PopupMenu.setOnDismissListener] to emmit dismiss change.
- * Only one flow can be used for a view at a time.
+ * *Warning:* The created flow uses [PopupMenu.setOnDismissListener]. Only one flow can be used at a
+ * time.
+ *
+ * Example:
+ *
+ * ```
+ * popupMenu.dismisses()
+ *      .onEach { /* handle popup menu dismiss */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun PopupMenu.dismisses(): Flow<Unit> = channelFlow {
-    setOnDismissListener(listener(this, ::offer))
+    setOnDismissListener(listener(this, ::trySend))
     awaitClose { setOnMenuItemClickListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Unit) -> Boolean
+    emitter: (Unit) -> Unit
 ) = PopupMenu.OnDismissListener {
     if (scope.isActive) { emitter(Unit) }
 }

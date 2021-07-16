@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 Vladimir Raupov
+ * Copyright 2021 Vladimir Raupov
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package ru.ldralighieri.corbind
+package ru.ldralighieri.corbind.internal
 
 import androidx.annotation.RestrictTo
 import kotlinx.coroutines.channels.Channel
@@ -24,13 +24,4 @@ import kotlinx.coroutines.channels.ReceiveChannel
 inline fun <T> corbindReceiveChannel(
     capacity: Int = Channel.RENDEZVOUS,
     block: Channel<T>.() -> Unit
-): ReceiveChannel<T> {
-    val channel = Channel<T>(capacity)
-    channel.block()
-    return channel
-}
-
-@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-fun <T> Channel<T>.offerElement(element: T): Boolean {
-    return if (!isClosedForSend) { offer(element) } else { false }
-}
+): ReceiveChannel<T> = Channel<T>(capacity).apply(block)

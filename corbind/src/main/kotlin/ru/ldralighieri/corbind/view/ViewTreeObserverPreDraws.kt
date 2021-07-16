@@ -29,8 +29,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on pre-draws on [View].
@@ -46,17 +45,17 @@ fun View.preDraws(
     proceedDrawingPass: () -> Boolean,
     action: suspend () -> Unit
 ) {
-    val events = scope.actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
+    val events = scope.actor<Unit>(Dispatchers.Main.immediate, capacity) {
+        for (ignored in channel) action()
     }
 
-    val listener = listener(scope, proceedDrawingPass, events::offer)
+    val listener = listener(scope, proceedDrawingPass, events::trySend)
     viewTreeObserver.addOnPreDrawListener(listener)
     events.invokeOnClose { viewTreeObserver.removeOnPreDrawListener(listener) }
 }
 
 /**
- * Perform an action on pre-draws on [View] inside new [CoroutineScope].
+ * Perform an action on pre-draws on [View], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param proceedDrawingPass Let drawing process proceed
@@ -67,17 +66,20 @@ suspend fun View.preDraws(
     proceedDrawingPass: () -> Boolean,
     action: suspend () -> Unit
 ) = coroutineScope {
-    val events = actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
-    }
-
-    val listener = listener(this, proceedDrawingPass, events::offer)
-    viewTreeObserver.addOnPreDrawListener(listener)
-    events.invokeOnClose { viewTreeObserver.removeOnPreDrawListener(listener) }
+    preDraws(this, capacity, proceedDrawingPass, action)
 }
 
 /**
  * Create a channel for pre-draws on [View].
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.preDraws(scope)
+ *          .consumeEach { /* handle pre-draws */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -89,7 +91,7 @@ fun View.preDraws(
     capacity: Int = Channel.RENDEZVOUS,
     proceedDrawingPass: () -> Boolean
 ): ReceiveChannel<Unit> = corbindReceiveChannel(capacity) {
-    val listener = listener(scope, proceedDrawingPass, ::offerElement)
+    val listener = listener(scope, proceedDrawingPass, ::trySend)
     viewTreeObserver.addOnPreDrawListener(listener)
     invokeOnClose { viewTreeObserver.removeOnPreDrawListener(listener) }
 }
@@ -97,13 +99,21 @@ fun View.preDraws(
 /**
  * Create a flow for pre-draws on [View].
  *
+ * Example:
+ *
+ * ```
+ * view.preDraws()
+ *      .onEach { /* handle pre-draws */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
+ *
  * @param proceedDrawingPass Let drawing process proceed
  */
 @CheckResult
 fun View.preDraws(
     proceedDrawingPass: () -> Boolean
 ): Flow<Unit> = channelFlow {
-    val listener = listener(this, proceedDrawingPass, ::offer)
+    val listener = listener(this, proceedDrawingPass, ::trySend)
     viewTreeObserver.addOnPreDrawListener(listener)
     awaitClose { viewTreeObserver.removeOnPreDrawListener(listener) }
 }
@@ -112,9 +122,8 @@ fun View.preDraws(
 private fun listener(
     scope: CoroutineScope,
     proceedDrawingPass: () -> Boolean,
-    emitter: (Unit) -> Boolean
+    emitter: (Unit) -> Unit
 ) = ViewTreeObserver.OnPreDrawListener {
-
     if (scope.isActive) {
         emitter(Unit)
         return@OnPreDrawListener proceedDrawingPass()

@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 sealed class ViewAttachEvent {
     abstract val view: View
@@ -44,7 +43,7 @@ data class ViewAttachDetachedEvent(
 ) : ViewAttachEvent()
 
 /**
- * Perform an action on attach and detach events on [View].
+ * Perform an action on [attach and detach events][ViewAttachEvent] on [View].
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -55,18 +54,18 @@ fun View.attachEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (ViewAttachEvent) -> Unit
 ) {
-
-    val events = scope.actor<ViewAttachEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<ViewAttachEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    val listener = listener(scope, events::offer)
+    val listener = listener(scope, events::trySend)
     addOnAttachStateChangeListener(listener)
     events.invokeOnClose { removeOnAttachStateChangeListener(listener) }
 }
 
 /**
- * Perform an action on attach and detach events on [View] inside new CoroutineScope.
+ * Perform an action on [attach and detach events][ViewAttachEvent] on [View], inside new
+ * [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -75,18 +74,33 @@ suspend fun View.attachEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (ViewAttachEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<ViewAttachEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    val listener = listener(this, events::offer)
-    addOnAttachStateChangeListener(listener)
-    events.invokeOnClose { removeOnAttachStateChangeListener(listener) }
+    attachEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of attach and detach events on [View].
+ * Create a channel of [attach and detach events][ViewAttachEvent] on [View].
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * launch {
+ *      view.attachEvents(scope)
+ *          .consumeEach { event ->
+ *              when (event) {
+ *                  is ViewAttachAttachedEvent -> { /* handle attach event */ }
+ *                  is ViewAttachDetachedEvent -> { /* handle detach event */ }
+ *              }
+ *          }
+ * }
+ *
+ * // handle one event
+ * launch {
+ *      view.attachEvents(scope)
+ *          .filterIsInstance<ViewAttachAttachedEvent>()
+ *          .consumeEach { /* handle attach event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -96,17 +110,37 @@ fun View.attachEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<ViewAttachEvent> = corbindReceiveChannel(capacity) {
-    val listener = listener(scope, ::offerElement)
+    val listener = listener(scope, ::trySend)
     addOnAttachStateChangeListener(listener)
     invokeOnClose { removeOnAttachStateChangeListener(listener) }
 }
 
 /**
- * Create a flow of attach and detach events on [View].
+ * Create a flow of [attach and detach events][ViewAttachEvent] on [View].
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * view.attachEvents()
+ *      .onEach { event ->
+ *          when (event) {
+ *              is ViewAttachAttachedEvent -> { /* handle attach event */ }
+ *              is ViewAttachDetachedEvent -> { /* handle detach event */ }
+ *          }
+ *      }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // handle one event
+ * view.attachEvents()
+ *      .filterIsInstance<ViewAttachAttachedEvent>()
+ *      .onEach { /* handle attach event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun View.attachEvents(): Flow<ViewAttachEvent> = channelFlow {
-    val listener = listener(this, ::offer)
+    val listener = listener(this, ::trySend)
     addOnAttachStateChangeListener(listener)
     awaitClose { removeOnAttachStateChangeListener(listener) }
 }
@@ -114,7 +148,7 @@ fun View.attachEvents(): Flow<ViewAttachEvent> = channelFlow {
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (ViewAttachEvent) -> Boolean
+    emitter: (ViewAttachEvent) -> Unit
 ) = object : View.OnAttachStateChangeListener {
 
     override fun onViewAttachedToWindow(v: View) { onEvent(ViewAttachAttachedEvent(v)) }

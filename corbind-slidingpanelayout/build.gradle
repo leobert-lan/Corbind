@@ -14,15 +14,17 @@
  * limitations under the License.
  */
 
-apply plugin: 'com.android.library'
-apply plugin: 'org.jetbrains.kotlin.android'
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+}
 
 android {
 
     compileSdkVersion buildConfig.compileSdk
     defaultConfig {
         minSdkVersion buildConfig.minSdk
-        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -46,7 +48,7 @@ android {
 dependencies {
     api project(':corbind')
 
-    api deps.androidx.slidingPaneLayout
+    api deps.androidx.slidingpanelayout
 }
 
 apply from: rootProject.file('gradle/gradle-mvn-push.gradle')

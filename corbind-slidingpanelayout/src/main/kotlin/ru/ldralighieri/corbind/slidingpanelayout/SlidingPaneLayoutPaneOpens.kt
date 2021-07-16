@@ -26,17 +26,17 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on the open state of the pane of [SlidingPaneLayout].
  *
- * *Warning:* The created actor uses [SlidingPaneLayout.setPanelSlideListener] to emmit dismiss
- * change. Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [SlidingPaneLayout.setPanelSlideListener]. Only one actor can
+ * be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -47,22 +47,21 @@ fun SlidingPaneLayout.panelOpens(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Boolean) -> Unit
 ) {
-
-    val events = scope.actor<Boolean>(Dispatchers.Main, capacity) {
+    val events = scope.actor<Boolean>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    events.offer(isOpen)
-    setPanelSlideListener(listener(scope, events::offer))
+    events.trySend(isOpen)
+    setPanelSlideListener(listener(scope, events::trySend))
     events.invokeOnClose { setPanelSlideListener(null) }
 }
 
 /**
- * Perform an action on the open state of the pane of [SlidingPaneLayout] inside new
+ * Perform an action on the open state of the pane of [SlidingPaneLayout], inside new
  * [CoroutineScope].
  *
- * *Warning:* The created actor uses [SlidingPaneLayout.setPanelSlideListener] to emmit dismiss
- * change. Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [SlidingPaneLayout.setPanelSlideListener]. Only one actor can
+ * be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -71,21 +70,25 @@ suspend fun SlidingPaneLayout.panelOpens(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Boolean) -> Unit
 ) = coroutineScope {
-
-    val events = actor<Boolean>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    events.offer(isOpen)
-    setPanelSlideListener(listener(this, events::offer))
-    events.invokeOnClose { setPanelSlideListener(null) }
+    panelOpens(this, capacity, action)
 }
 
 /**
  * Create a channel of the open state of the pane of [SlidingPaneLayout].
  *
- * *Warning:* The created channel uses [SlidingPaneLayout.setPanelSlideListener] to emmit dismiss
- * change. Only one channel can be used for a view at a time.
+ * *Warning:* The created channel uses [SlidingPaneLayout.setPanelSlideListener]. Only one channel
+ * can be used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      slidingPaneLayout.panelOpens(scope)
+ *          .consumeEach { /* handle open state */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -95,33 +98,47 @@ fun SlidingPaneLayout.panelOpens(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Boolean> = corbindReceiveChannel(capacity) {
-    offerElement(isOpen)
-    setPanelSlideListener(listener(scope, ::offerElement))
+    trySend(isOpen)
+    setPanelSlideListener(listener(scope, ::trySend))
     invokeOnClose { setPanelSlideListener(null) }
 }
 
 /**
  * Create a flow of the open state of the pane of [SlidingPaneLayout].
  *
- * *Warning:* The created flow uses [SlidingPaneLayout.setPanelSlideListener] to emmit dismiss
- * change. Only one flow can be used for a view at a time.
+ * *Warning:* The created flow uses [SlidingPaneLayout.setPanelSlideListener]. Only one flow can be
+ * used at a time.
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * slidingPaneLayout.panelOpens()
+ *      .onEach { /* handle open state */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * slidingPaneLayout.panelOpens()
+ *      .dropInitialValue()
+ *      .onEach { /* handle open state */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun SlidingPaneLayout.panelOpens(): Flow<Boolean> = channelFlow {
-    offer(isOpen)
-    setPanelSlideListener(listener(this, ::offer))
+fun SlidingPaneLayout.panelOpens(): InitialValueFlow<Boolean> = channelFlow {
+    setPanelSlideListener(listener(this, ::trySend))
     awaitClose { setPanelSlideListener(null) }
-}
+}.asInitialValueFlow(isOpen)
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Boolean) -> Boolean
+    emitter: (Boolean) -> Unit
 ) = object : SlidingPaneLayout.PanelSlideListener {
 
-    override fun onPanelSlide(panel: View, slideOffset: Float) { }
+    override fun onPanelSlide(panel: View, slideOffset: Float) = Unit
     override fun onPanelOpened(panel: View) { onEvent(true) }
     override fun onPanelClosed(panel: View) { onEvent(false) }
 

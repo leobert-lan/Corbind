@@ -28,14 +28,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on [View] click events.
  *
- * *Warning:* The created actor uses [View.setOnClickListener] to emmit clicks. Only one actor
- * can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnClickListener]. Only one actor can be used at a
+ * time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -46,20 +45,19 @@ fun View.clicks(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) {
-
-    val events = scope.actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
+    val events = scope.actor<Unit>(Dispatchers.Main.immediate, capacity) {
+        for (ignored in channel) action()
     }
 
-    setOnClickListener(listener(scope, events::offer))
+    setOnClickListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnClickListener(null) }
 }
 
 /**
- * Perform an action on [View] click events inside new CoroutineScope.
+ * Perform an action on [View] click events, inside new [CoroutineScope].
  *
- * *Warning:* The created actor uses [View.setOnClickListener] to emmit clicks. Only one actor
- * can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnClickListener]. Only one actor can be used at a
+ * time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -68,20 +66,23 @@ suspend fun View.clicks(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) = coroutineScope {
-
-    val events = actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
-    }
-
-    setOnClickListener(listener(this, events::offer))
-    events.invokeOnClose { setOnClickListener(null) }
+    clicks(this, capacity, action)
 }
 
 /**
- * Create a channel which emits on [View] click events
+ * Create a channel which emits on [View] click events.
  *
- * *Warning:* The created channel uses [View.setOnClickListener] to emmit clicks. Only one
- * channel can be used for a view at a time.
+ * *Warning:* The created channel uses [View.setOnClickListener]. Only one channel can be used at a
+ * time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.clicks(scope)
+ *          .consumeEach { /* handle click */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -91,26 +92,33 @@ fun View.clicks(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Unit> = corbindReceiveChannel(capacity) {
-    setOnClickListener(listener(scope, ::offerElement))
+    setOnClickListener(listener(scope, ::trySend))
     invokeOnClose { setOnClickListener(null) }
 }
 
 /**
- * Create a flow which emits on [View] click events
+ * Create a flow which emits on [View] click events.
  *
- * *Warning:* The created flow uses [View.setOnClickListener] to emmit clicks. Only one flow can
- * be used for a view at a time.
+ * *Warning:* The created flow uses [View.setOnClickListener]. Only one flow can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * view.clicks()
+ *      .onEach { /* handle click */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun View.clicks(): Flow<Unit> = channelFlow {
-    setOnClickListener(listener(this, ::offer))
+    setOnClickListener(listener(this, ::trySend))
     awaitClose { setOnClickListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Unit) -> Boolean
+    emitter: (Unit) -> Unit
 ) = View.OnClickListener {
     if (scope.isActive) { emitter(Unit) }
 }

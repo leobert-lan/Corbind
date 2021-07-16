@@ -30,95 +30,112 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
- * Perform an action on the dismiss events from [View] on [SwipeDismissBehavior].
+ * Perform an action on the drag state change events from [View] on [SwipeDismissBehavior].
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
  */
-fun View.dismisses(
+fun View.dragStateChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS,
-    action: suspend (View) -> Unit
+    action: suspend (Int) -> Unit
 ) {
-
-    val events = scope.actor<View>(Dispatchers.Main, capacity) {
-        for (view in channel) action(view)
+    val events = scope.actor<Int>(Dispatchers.Main.immediate, capacity) {
+        for (state in channel) action(state)
     }
 
     val behavior = getBehavior(this)
-    behavior.setListener(listener(scope, events::offer))
+    behavior.listener = listener(scope, events::trySend)
     events.invokeOnClose { behavior.setListener(null) }
 }
 
 /**
- * Perform an action on the dismiss events from [View] on [SwipeDismissBehavior] inside new
- * [CoroutineScope].
+ * Perform an action on the drag state change events from [View] on [SwipeDismissBehavior], inside
+ * new [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [SwipeDismissBehavior.setListener]. Only one actor can be used
+ * at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
  */
-suspend fun View.dismisses(
+suspend fun View.dragStateChanges(
     capacity: Int = Channel.RENDEZVOUS,
-    action: suspend (View) -> Unit
+    action: suspend (Int) -> Unit
 ) = coroutineScope {
-
-    val events = actor<View>(Dispatchers.Main, capacity) {
-        for (view in channel) action(view)
-    }
-
-    val behavior = getBehavior(this@dismisses)
-    behavior.setListener(listener(this, events::offer))
-    events.invokeOnClose { behavior.setListener(null) }
+    dragStateChanges(this, capacity, action)
 }
 
 /**
- * Create a channel which emits the dismiss events from [View] on [SwipeDismissBehavior].
+ * Create a channel which emits the drag state change events from [View] on [SwipeDismissBehavior].
+ *
+ * *Warning:* The created channel uses [SwipeDismissBehavior.setListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      swipeDismissBehavior.dragStateChanges(scope)
+ *          .consumeEach { /* handle drag state change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  */
 @CheckResult
-fun View.dismisses(
+fun View.dragStateChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
-): ReceiveChannel<View> = corbindReceiveChannel(capacity) {
-    val behavior = getBehavior(this@dismisses)
-    behavior.setListener(listener(scope, ::offerElement))
+): ReceiveChannel<Int> = corbindReceiveChannel(capacity) {
+    val behavior = getBehavior(this@dragStateChanges)
+    behavior.listener = listener(scope, ::trySend)
     invokeOnClose { behavior.setListener(null) }
 }
 
 /**
- * Create a flow which emits the dismiss events from [View] on [SwipeDismissBehavior].
+ * Create a flow which emits the drag state change events from [View] on [SwipeDismissBehavior].
+ *
+ * *Warning:* The created flow uses [SwipeDismissBehavior.setListener]. Only one flow can be used at
+ * a time.
+ *
+ * Example:
+ *
+ * ```
+ * swipeDismissBehavior.dragStateChanges()
+ *      .onEach { /* handle drag state change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
-fun View.dismisses(): Flow<View> = channelFlow {
-    val behavior = getBehavior(this@dismisses)
-    behavior.setListener(listener(this, ::offer))
+fun View.dragStateChanges(): Flow<Int> = channelFlow {
+    val behavior = getBehavior(this@dragStateChanges)
+    behavior.listener = listener(this, ::trySend)
     awaitClose { behavior.setListener(null) }
 }
 
 @CheckResult
 private fun getBehavior(view: View): SwipeDismissBehavior<*> {
     val params = view.layoutParams as? CoordinatorLayout.LayoutParams
-            ?: throw IllegalArgumentException("The view is not in a Coordinator Layout.")
+        ?: throw IllegalArgumentException("The view is not in a Coordinator Layout.")
     return params.behavior as SwipeDismissBehavior<*>?
-            ?: throw IllegalStateException("There's no behavior set on this view.")
+        ?: throw IllegalStateException("There's no behavior set on this view.")
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (View) -> Boolean
+    emitter: (Int) -> Unit
 ) = object : SwipeDismissBehavior.OnDismissListener {
 
-    override fun onDismiss(view: View) {
-        if (scope.isActive) { emitter(view) }
-    }
+    override fun onDismiss(view: View) = Unit
 
-    override fun onDragStateChanged(state: Int) { }
+    override fun onDragStateChanged(state: Int) {
+        if (scope.isActive) { emitter(state) }
+    }
 }

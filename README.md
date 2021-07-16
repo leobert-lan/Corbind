@@ -1,11 +1,15 @@
 ﻿[![Corbind](logo.svg)](https://ldralighieri.github.io/Corbind)
 
 [![Maven Central](https://img.shields.io/maven-central/v/ru.ldralighieri.corbind/corbind.svg)](https://search.maven.org/search?q=g:ru.ldralighieri.corbind)
-[![Kotlin Version](https://img.shields.io/badge/Kotlin-v1.3.50-blue.svg)](https://kotlinlang.org)
+[![Kotlin Version](https://img.shields.io/badge/Kotlin-v1.5.20-blue.svg)](https://kotlinlang.org)
+[![Kotlin Coroutines Version](https://img.shields.io/badge/Coroutines-v1.5.0-blue.svg)](https://kotlinlang.org/docs/reference/coroutines-overview.html)
 [![GitHub license](https://img.shields.io/badge/license-Apache%20License%202.0-blue.svg?style=flat)](https://www.apache.org/licenses/LICENSE-2.0)
 
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/a1c9a1b1d1ce4ca7a201ab93492bf6e0)](https://www.codacy.com/app/LDRAlighieri/Corbind?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=LDRAlighieri/Corbind&amp;utm_campaign=Badge_Grade)
 [![API](https://img.shields.io/badge/API-14%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=14)
+
+[![Google Dev Library](https://img.shields.io/badge/Featured%20in%20devlibrary.withgoogle.com-Corbind-blue)](https://devlibrary.withgoogle.com/products/android/repos/LDRAlighieri-Corbind)
+[![Android Weekly](https://androidweekly.net/issues/issue-377/badge)](https://androidweekly.net/issues/issue-377)
 
 <br>
 
@@ -21,25 +25,58 @@ This library is for Android applications only. Help you to transform Android UI 
 
 Platform bindings:
 ```groovy
-implementation 'ru.ldralighieri.corbind:corbind:1.0.1'
+implementation 'ru.ldralighieri.corbind:corbind:1.5.2'
 ```
 
 AndroidX library bindings:
 ```groovy
-implementation 'ru.ldralighieri.corbind:corbind-core:1.0.1'
-implementation 'ru.ldralighieri.corbind:corbind-appcompat:1.0.1'
-implementation 'ru.ldralighieri.corbind:corbind-drawerlayout:1.0.1'
-implementation 'ru.ldralighieri.corbind:corbind-leanback:1.0.1'
-implementation 'ru.ldralighieri.corbind:corbind-recyclerview:1.0.1'
-implementation 'ru.ldralighieri.corbind:corbind-slidingpanelayout:1.0.1'
-implementation 'ru.ldralighieri.corbind:corbind-swiperefreshlayout:1.0.1'
-implementation 'ru.ldralighieri.corbind:corbind-viewpager:1.0.1'
+implementation 'ru.ldralighieri.corbind:corbind-activity:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-appcompat:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-core:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-drawerlayout:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-leanback:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-lifecycle:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-navigation:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-recyclerview:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-slidingpanelayout:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-swiperefreshlayout:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-viewpager:1.5.2'
+implementation 'ru.ldralighieri.corbind:corbind-viewpager2:1.5.2'
 ```
 
 Google 'material' library bindings:
 ```groovy
-implementation 'ru.ldralighieri.corbind:corbind-material:1.0.1'
+implementation 'ru.ldralighieri.corbind:corbind-material:1.5.2'
 ```
+
+Snapshot build:
+```groovy
+repositories {
+    maven { url 'https://oss.sonatype.org/content/repositories/snapshots/' }
+}
+
+dependencies {
+   implementation 'ru.ldralighieri.corbind:{module}:1.5.3-SNAPSHOT'
+}
+```
+
+
+## List of extensions
+You can find a list of extensions in the description of each module:  
+[corbind]  
+[corbind-activity]  
+[corbind-appcompat]  
+[corbind-core]  
+[corbind-drawerlayout]  
+[corbind-leanback]  
+[corbind-lifecycle]  
+[corbind-material]  
+[corbind-navigation]  
+[corbind-recyclerview]  
+[corbind-slidingpanelayout]  
+[corbind-swiperefreshlayout]  
+[corbind-viewpager]  
+[corbind-viewpager2]
 
 
 ## How to use it?
@@ -49,7 +86,7 @@ If you need to get a text change events of EditText widget, simple use case with
 findViewById<EditText>(R.id.et_name)
     .textChanges() // Flow<CharSequence>
     .onEach { /* handle text change events */ }
-    .launchIn(scope)
+    .launchIn(lifecycleScope) // lifecycle-runtime-ktx
 ```
 
 If you prefer hot [ReceiveChannel][channel] and you need to get a ViewPager page selection events, then the use case will transform in something like this:
@@ -85,8 +122,10 @@ combine(
     transform = { email, password -> email && password }
 )
     .onEach { bt_login.isEnabled = it }
-    .launchIn(scope)
+    .launchIn(lifecycleScope) // lifecycle-runtime-ktx
 ```
+
+More examples in module descriptions and in source code
 
 
 ## Missed or forgot something?
@@ -102,7 +141,7 @@ If I forgot something or you have any ideas what can be added or corrected, plea
 ## License
 
 ```
-Copyright 2019 Vladimir Raupov
+Copyright 2019-2021 Vladimir Raupov
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -123,3 +162,18 @@ limitations under the License.
 [flow]: https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-flow/index.html
 [channel]: https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/-receive-channel/index.html
 [actor]: https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/actor.html
+
+[corbind]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind
+[corbind-activity]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-activity
+[corbind-appcompat]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-appcompat
+[corbind-core]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-core
+[corbind-drawerlayout]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-drawerlayout
+[corbind-leanback]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-leanback
+[corbind-lifecycle]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-lifecycle
+[corbind-material]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-material
+[corbind-navigation]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-navigation
+[corbind-recyclerview]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-recyclerview
+[corbind-slidingpanelayout]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-slidingpanelayout
+[corbind-swiperefreshlayout]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-swiperefreshlayout
+[corbind-viewpager]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-viewpager
+[corbind-viewpager2]: https://github.com/LDRAlighieri/Corbind/tree/master/corbind-viewpager2

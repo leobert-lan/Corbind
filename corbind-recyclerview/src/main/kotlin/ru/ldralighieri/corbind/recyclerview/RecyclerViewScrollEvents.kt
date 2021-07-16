@@ -28,13 +28,16 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
-data class RecyclerViewScrollEvent(val view: RecyclerView, val dx: Int, val dy: Int)
+data class RecyclerViewScrollEvent(
+    val view: RecyclerView,
+    val dx: Int,
+    val dy: Int
+)
 
 /**
- * Perform an action on scroll events on [RecyclerView].
+ * Perform an action on [scroll events][RecyclerViewScrollEvent] on [RecyclerView].
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -45,18 +48,18 @@ fun RecyclerView.scrollEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (RecyclerViewScrollEvent) -> Unit
 ) {
-
-    val events = scope.actor<RecyclerViewScrollEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<RecyclerViewScrollEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    val scrollListener = listener(scope, events::offer)
+    val scrollListener = listener(scope, events::trySend)
     addOnScrollListener(scrollListener)
     events.invokeOnClose { removeOnScrollListener(scrollListener) }
 }
 
 /**
- * Perform an action on scroll events on [RecyclerView] inside new [CoroutineScope].
+ * Perform an action on [scroll events][RecyclerViewScrollEvent] on [RecyclerView], inside new
+ * [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -65,18 +68,20 @@ suspend fun RecyclerView.scrollEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (RecyclerViewScrollEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<RecyclerViewScrollEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    val scrollListener = listener(this, events::offer)
-    addOnScrollListener(scrollListener)
-    events.invokeOnClose { removeOnScrollListener(scrollListener) }
+    scrollEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of scroll events on [RecyclerView].
+ * Create a channel of [scroll events][RecyclerViewScrollEvent] on [RecyclerView].
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      RecyclerView.scrollEvents(scope)
+ *          .consumeEach { /* handle scroll event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -86,17 +91,25 @@ fun RecyclerView.scrollEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<RecyclerViewScrollEvent> = corbindReceiveChannel(capacity) {
-    val scrollListener = listener(scope, ::offerElement)
+    val scrollListener = listener(scope, ::trySend)
     addOnScrollListener(scrollListener)
     invokeOnClose { removeOnScrollListener(scrollListener) }
 }
 
 /**
- * Create a flow of scroll events on [RecyclerView].
+ * Create a flow of [scroll events][RecyclerViewScrollEvent] on [RecyclerView].
+ *
+ * Example:
+ *
+ * ```
+ * recyclerView.scrollEvents()
+ *      .onEach { /* handle scroll event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun RecyclerView.scrollEvents(): Flow<RecyclerViewScrollEvent> = channelFlow {
-    val scrollListener = listener(this, ::offer)
+    val scrollListener = listener(this, ::trySend)
     addOnScrollListener(scrollListener)
     awaitClose { removeOnScrollListener(scrollListener) }
 }
@@ -104,7 +117,7 @@ fun RecyclerView.scrollEvents(): Flow<RecyclerViewScrollEvent> = channelFlow {
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (RecyclerViewScrollEvent) -> Boolean
+    emitter: (RecyclerViewScrollEvent) -> Unit
 ) = object : RecyclerView.OnScrollListener() {
 
     override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {

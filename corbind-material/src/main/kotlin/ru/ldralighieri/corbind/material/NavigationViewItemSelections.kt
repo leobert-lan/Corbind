@@ -29,11 +29,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on the selected item in [NavigationView].
+ *
+ * *Warning:* The created actor uses [NavigationView.setNavigationItemSelectedListener]. Only one
+ * actor can be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -44,18 +46,20 @@ fun NavigationView.itemSelections(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (MenuItem) -> Unit
 ) {
-
-    val events = scope.actor<MenuItem>(Dispatchers.Main, capacity) {
+    val events = scope.actor<MenuItem>(Dispatchers.Main.immediate, capacity) {
         for (item in channel) action(item)
     }
 
-    setInitialValue(this, events::offer)
-    setNavigationItemSelectedListener(listener(scope, events::offer))
+    setInitialValue(this, events::trySend)
+    setNavigationItemSelectedListener(listener(scope, events::trySend))
     events.invokeOnClose { setNavigationItemSelectedListener(null) }
 }
 
 /**
- * Perform an action on the selected item in [NavigationView] inside new [CoroutineScope].
+ * Perform an action on the selected item in [NavigationView], inside new [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [NavigationView.setNavigationItemSelectedListener]. Only one
+ * actor can be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -64,18 +68,25 @@ suspend fun NavigationView.itemSelections(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (MenuItem) -> Unit
 ) = coroutineScope {
-
-    val events = actor<MenuItem>(Dispatchers.Main, capacity) {
-        for (item in channel) action(item)
-    }
-
-    setInitialValue(this@itemSelections, events::offer)
-    setNavigationItemSelectedListener(listener(this, events::offer))
-    events.invokeOnClose { setNavigationItemSelectedListener(null) }
+    itemSelections(this, capacity, action)
 }
 
 /**
  * Create a channel which emits the selected item in [NavigationView].
+ *
+ * *Warning:* The created channel uses [NavigationView.setNavigationItemSelectedListener]. Only one
+ * channel can be used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      navigationView.itemSelections(scope)
+ *          .consumeEach { /* handle selected item */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -85,26 +96,44 @@ fun NavigationView.itemSelections(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<MenuItem> = corbindReceiveChannel(capacity) {
-    setInitialValue(this@itemSelections, ::offerElement)
-    setNavigationItemSelectedListener(listener(scope, ::offerElement))
+    setInitialValue(this@itemSelections, ::trySend)
+    setNavigationItemSelectedListener(listener(scope, ::trySend))
     invokeOnClose { setNavigationItemSelectedListener(null) }
 }
 
 /**
  * Create a flow which emits the selected item in [NavigationView].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Warning:* The created flow uses [NavigationView.setNavigationItemSelectedListener]. Only one
+ * flow can be used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * navigationView.itemSelections()
+ *      .onEach { /* handle selected item */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * navigationView.itemSelections()
+ *      .drop(1)
+ *      .onEach { /* handle selected item */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun NavigationView.itemSelections(): Flow<MenuItem> = channelFlow {
-    setInitialValue(this@itemSelections, ::offer)
-    setNavigationItemSelectedListener(listener(this, ::offer))
+    setInitialValue(this@itemSelections, ::trySend)
+    setNavigationItemSelectedListener(listener(this, ::trySend))
     awaitClose { setNavigationItemSelectedListener(null) }
 }
 
 private fun setInitialValue(
     navigationView: NavigationView,
-    emitter: (MenuItem) -> Boolean
+    emitter: (MenuItem) -> Unit
 ) {
     val menu = navigationView.menu
     for (i in 0 until menu.size()) {
@@ -119,7 +148,7 @@ private fun setInitialValue(
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (MenuItem) -> Boolean
+    emitter: (MenuItem) -> Unit
 ) = NavigationView.OnNavigationItemSelectedListener {
     if (scope.isActive) { emitter(it) }
     return@OnNavigationItemSelectedListener true

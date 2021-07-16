@@ -28,11 +28,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on String values for search query changes on [SearchBar].
+ *
+ * *Warning:* The created actor uses [SearchBar.setSearchBarListener]. Only one actor can be used at
+ * a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -43,18 +45,20 @@ fun SearchBar.searchQueryChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (String) -> Unit
 ) {
-
-    val events = scope.actor<String>(Dispatchers.Main, capacity) {
+    val events = scope.actor<String>(Dispatchers.Main.immediate, capacity) {
         for (query in channel) action(query)
     }
 
-    setSearchBarListener(listener(scope, events::offer))
+    setSearchBarListener(listener(scope, events::trySend))
     events.invokeOnClose { setSearchBarListener(null) }
 }
 
 /**
- * Perform an action on String values for search query changes on [SearchBar] inside new
+ * Perform an action on String values for search query changes on [SearchBar], inside new
  * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [SearchBar.setSearchBarListener]. Only one actor can be used at
+ * a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -63,17 +67,23 @@ suspend fun SearchBar.searchQueryChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (String) -> Unit
 ) = coroutineScope {
-
-    val events = actor<String>(Dispatchers.Main, capacity) {
-        for (query in channel) action(query)
-    }
-
-    setSearchBarListener(listener(this, events::offer))
-    events.invokeOnClose { setSearchBarListener(null) }
+    searchQueryChanges(this, capacity, action)
 }
 
 /**
  * Create a channel of String values for search query changes on [SearchBar].
+ *
+ * *Warning:* The created channel uses [SearchBar.setSearchBarListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      absListView.scrollEvents(scope)
+ *          .consumeEach { /* handle query change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -83,29 +93,40 @@ fun SearchBar.searchQueryChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<String> = corbindReceiveChannel(capacity) {
-    setSearchBarListener(listener(scope, ::offerElement))
+    setSearchBarListener(listener(scope, ::trySend))
     invokeOnClose { setSearchBarListener(null) }
 }
 
 /**
  * Create a flow of String values for search query changes on [SearchBar].
+ *
+ * *Warning:* The created flow uses [SearchBar.setSearchBarListener]. Only one flow can be used at a
+ * time.
+ *
+ * Example:
+ *
+ * ```
+ * searchBar.searchQueryChanges()
+ *      .onEach { /* handle query change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun SearchBar.searchQueryChanges(): Flow<String> = channelFlow {
-    setSearchBarListener(listener(this, ::offer))
+    setSearchBarListener(listener(this, ::trySend))
     awaitClose { setSearchBarListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (String) -> Boolean
+    emitter: (String) -> Unit
 ) = object : SearchBar.SearchBarListener {
 
     override fun onSearchQueryChange(query: String) {
         if (scope.isActive) { emitter(query) }
     }
 
-    override fun onSearchQuerySubmit(query: String) { }
-    override fun onKeyboardDismiss(query: String) { }
+    override fun onSearchQuerySubmit(query: String) = Unit
+    override fun onKeyboardDismiss(query: String) = Unit
 }

@@ -30,8 +30,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 data class AdapterViewItemClickEvent(
     val view: AdapterView<*>,
@@ -41,7 +40,10 @@ data class AdapterViewItemClickEvent(
 )
 
 /**
- * Perform an action on the item click events for [AdapterView].
+ * Perform an action on the [item click events][AdapterViewItemClickEvent] for [AdapterView].
+ *
+ * *Warning:* The created actor uses [AdapterView.setOnItemClickListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -52,17 +54,20 @@ fun <T : Adapter> AdapterView<T>.itemClickEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (AdapterViewItemClickEvent) -> Unit
 ) {
-
-    val events = scope.actor<AdapterViewItemClickEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<AdapterViewItemClickEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    onItemClickListener = listener(scope, events::offer)
+    onItemClickListener = listener(scope, events::trySend)
     events.invokeOnClose { onItemClickListener = null }
 }
 
 /**
- * Perform an action on the item click events for [AdapterView] inside new CoroutineScope.
+ * Perform an action on the [item click events][AdapterViewItemClickEvent] for [AdapterView], inside
+ * new [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [AdapterView.setOnItemClickListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -71,17 +76,23 @@ suspend fun <T : Adapter> AdapterView<T>.itemClickEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (AdapterViewItemClickEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<AdapterViewItemClickEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    onItemClickListener = listener(this, events::offer)
-    events.invokeOnClose { onItemClickListener = null }
+    itemClickEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of the item click events for [AdapterView].
+ * Create a channel of the [item click events][AdapterViewItemClickEvent] for [AdapterView].
+ *
+ * *Warning:* The created channel uses [AdapterView.setOnItemClickListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      adapterView.itemClickEvents(scope)
+ *          .consumeEach { /* handle item click event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -91,23 +102,34 @@ fun <T : Adapter> AdapterView<T>.itemClickEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<AdapterViewItemClickEvent> = corbindReceiveChannel(capacity) {
-    onItemClickListener = listener(scope, ::offerElement)
+    onItemClickListener = listener(scope, ::trySend)
     invokeOnClose { onItemClickListener = null }
 }
 
 /**
- * Create a flow of the item click events for [AdapterView].
+ * Create a flow of the [item click events][AdapterViewItemClickEvent] for [AdapterView].
+ *
+ * *Warning:* The created flow uses [AdapterView.setOnItemClickListener]. Only one flow can be used
+ * at a time.
+ *
+ * Example:
+ *
+ * ```
+ * adapterView.itemClickEvents()
+ *      .onEach { /* handle item click event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun <T : Adapter> AdapterView<T>.itemClickEvents(): Flow<AdapterViewItemClickEvent> = channelFlow {
-    onItemClickListener = listener(this, ::offer)
+    onItemClickListener = listener(this, ::trySend)
     awaitClose { onItemClickListener = null }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (AdapterViewItemClickEvent) -> Boolean
+    emitter: (AdapterViewItemClickEvent) -> Unit
 ) = AdapterView.OnItemClickListener { parent, view: View?, position, id ->
     if (scope.isActive) {
         emitter(AdapterViewItemClickEvent(parent, view, position, id))

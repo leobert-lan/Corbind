@@ -25,14 +25,17 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on rating changes on [RatingBar].
+ *
+ * *Warning:* The created actor uses [RatingBar.setOnRatingBarChangeListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -43,18 +46,20 @@ fun RatingBar.ratingChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Float) -> Unit
 ) {
-
-    val events = scope.actor<Float>(Dispatchers.Main, capacity) {
+    val events = scope.actor<Float>(Dispatchers.Main.immediate, capacity) {
         for (rating in channel) action(rating)
     }
 
-    events.offer(rating)
-    onRatingBarChangeListener = listener(scope, events::offer)
+    events.trySend(rating)
+    onRatingBarChangeListener = listener(scope, events::trySend)
     events.invokeOnClose { onRatingBarChangeListener = null }
 }
 
 /**
- * Perform an action on rating changes on [RatingBar] inside new CoroutineScope.
+ * Perform an action on rating changes on [RatingBar], inside new [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [RatingBar.setOnRatingBarChangeListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -63,18 +68,25 @@ suspend fun RatingBar.ratingChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Float) -> Unit
 ) = coroutineScope {
-
-    val events = actor<Float>(Dispatchers.Main, capacity) {
-        for (rating in channel) action(rating)
-    }
-
-    events.offer(rating)
-    onRatingBarChangeListener = listener(this, events::offer)
-    events.invokeOnClose { onRatingBarChangeListener = null }
+    ratingChanges(this, capacity, action)
 }
 
 /**
  * Create a change of the rating changes on [RatingBar].
+ *
+ * *Warning:* The created channel uses [RatingBar.setOnRatingBarChangeListener]. Only one channel
+ * can be used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      ratingBar.ratingChanges(scope)
+ *          .consumeEach { /* handle rating change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -84,27 +96,44 @@ fun RatingBar.ratingChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Float> = corbindReceiveChannel(capacity) {
-    offerElement(rating)
-    onRatingBarChangeListener = listener(scope, ::offerElement)
+    trySend(rating)
+    onRatingBarChangeListener = listener(scope, ::trySend)
     invokeOnClose { onRatingBarChangeListener = null }
 }
 
 /**
  * Create a flow of the rating changes on [RatingBar].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Warning:* The created flow uses [RatingBar.setOnRatingBarChangeListener]. Only one flow can be
+ * used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * ratingBar.ratingChanges()
+ *      .onEach { /* handle rating change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * ratingBar.ratingChanges()
+ *      .dropInitialValue()
+ *      .onEach { /* handle rating change */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun RatingBar.ratingChanges(): Flow<Float> = channelFlow {
-    offer(rating)
-    onRatingBarChangeListener = listener(this, ::offer)
+fun RatingBar.ratingChanges(): InitialValueFlow<Float> = channelFlow {
+    onRatingBarChangeListener = listener(this, ::trySend)
     awaitClose { onRatingBarChangeListener = null }
-}
+}.asInitialValueFlow(rating)
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Float) -> Boolean
+    emitter: (Float) -> Unit
 ) = RatingBar.OnRatingBarChangeListener { _, rating, _ ->
     if (scope.isActive) { emitter(rating) }
 }

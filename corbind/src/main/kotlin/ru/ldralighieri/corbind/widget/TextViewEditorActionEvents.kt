@@ -30,8 +30,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
 import ru.ldralighieri.corbind.internal.AlwaysTrue
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 data class TextViewEditorActionEvent(
     val view: TextView,
@@ -40,7 +39,10 @@ data class TextViewEditorActionEvent(
 )
 
 /**
- * Perform an action on editor action events on [TextView].
+ * Perform an action on [editor action events][TextViewEditorActionEvent] on [TextView].
+ *
+ * *Warning:* The created actor uses [TextView.setOnEditorActionListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -54,17 +56,20 @@ fun TextView.editorActionEvents(
     handled: (TextViewEditorActionEvent) -> Boolean = AlwaysTrue,
     action: suspend (TextViewEditorActionEvent) -> Unit
 ) {
-
-    val events = scope.actor<TextViewEditorActionEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<TextViewEditorActionEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    setOnEditorActionListener(listener(scope, handled, events::offer))
+    setOnEditorActionListener(listener(scope, handled, events::trySend))
     events.invokeOnClose { setOnEditorActionListener(null) }
 }
 
 /**
- * Perform an action on editor action events on [TextView] inside new [CoroutineScope].
+ * Perform an action on [editor action events][TextViewEditorActionEvent] on [TextView], inside new
+ * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [TextView.setOnEditorActionListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
@@ -76,17 +81,23 @@ suspend fun TextView.editorActionEvents(
     handled: (TextViewEditorActionEvent) -> Boolean = AlwaysTrue,
     action: suspend (TextViewEditorActionEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<TextViewEditorActionEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    setOnEditorActionListener(listener(this, handled, events::offer))
-    events.invokeOnClose { setOnEditorActionListener(null) }
+    editorActionEvents(this, capacity, handled, action)
 }
 
 /**
- * Create a channel of editor action events on [TextView].
+ * Create a channel of [editor action events][TextViewEditorActionEvent] on [TextView].
+ *
+ * *Warning:* The created channel uses [TextView.setOnEditorActionListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      textView.editorActionEvents(scope)
+ *          .consumeEach { /* handle editor action event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -99,12 +110,23 @@ fun TextView.editorActionEvents(
     capacity: Int = Channel.RENDEZVOUS,
     handled: (TextViewEditorActionEvent) -> Boolean = AlwaysTrue
 ): ReceiveChannel<TextViewEditorActionEvent> = corbindReceiveChannel(capacity) {
-    setOnEditorActionListener(listener(scope, handled, ::offerElement))
+    setOnEditorActionListener(listener(scope, handled, ::trySend))
     invokeOnClose { setOnEditorActionListener(null) }
 }
 
 /**
- * Create a flow of editor action events on [TextView].
+ * Create a flow of [editor action events][TextViewEditorActionEvent] on [TextView].
+ *
+ * *Warning:* The created flow uses [TextView.setOnEditorActionListener]. Only one flow can be used
+ * at a time.
+ *
+ * Example:
+ *
+ * ```
+ * textView.editorActionEvents()
+ *      .onEach { /* handle editor action event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  *
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
  * [TextView.OnEditorActionListener].
@@ -113,7 +135,7 @@ fun TextView.editorActionEvents(
 fun TextView.editorActionEvents(
     handled: (TextViewEditorActionEvent) -> Boolean = AlwaysTrue
 ): Flow<TextViewEditorActionEvent> = channelFlow {
-    setOnEditorActionListener(listener(this, handled, ::offer))
+    setOnEditorActionListener(listener(this, handled, ::trySend))
     awaitClose { setOnEditorActionListener(null) }
 }
 
@@ -121,9 +143,8 @@ fun TextView.editorActionEvents(
 private fun listener(
     scope: CoroutineScope,
     handled: (TextViewEditorActionEvent) -> Boolean,
-    emitter: (TextViewEditorActionEvent) -> Boolean
+    emitter: (TextViewEditorActionEvent) -> Unit
 ) = TextView.OnEditorActionListener { v, actionId, keyEvent ->
-
     if (scope.isActive) {
         val event = TextViewEditorActionEvent(v, actionId, keyEvent)
         if (handled(event)) {

@@ -30,14 +30,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
 import ru.ldralighieri.corbind.internal.AlwaysTrue
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on [DragEvent] for [View].
  *
- * *Warning:* The created actor uses [View.setOnDragListener] to emmit drags. Only one actor can
- * be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnDragListener]. Only one actor can be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -51,20 +49,18 @@ fun View.drags(
     handled: (DragEvent) -> Boolean = AlwaysTrue,
     action: suspend (DragEvent) -> Unit
 ) {
-
-    val events = scope.actor<DragEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<DragEvent>(Dispatchers.Main.immediate, capacity) {
         for (drag in channel) action(drag)
     }
 
-    setOnDragListener(listener(scope, handled, events::offer))
+    setOnDragListener(listener(scope, handled, events::trySend))
     events.invokeOnClose { setOnDragListener(null) }
 }
 
 /**
- * Perform an action on [DragEvent] for [View] inside new CoroutineScope.
+ * Perform an action on [DragEvent] for [View], inside new [CoroutineScope].
  *
- * *Warning:* The created actor uses [View.setOnDragListener] to emmit drags. Only one actor can
- * be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnDragListener]. Only one actor can be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param handled Predicate invoked with each value to determine the return value of the underlying
@@ -76,20 +72,23 @@ suspend fun View.drags(
     handled: (DragEvent) -> Boolean = AlwaysTrue,
     action: suspend (DragEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<DragEvent>(Dispatchers.Main, capacity) {
-        for (drag in channel) action(drag)
-    }
-
-    setOnDragListener(listener(this, handled, events::offer))
-    events.invokeOnClose { setOnDragListener(null) }
+    drags(this, capacity, handled, action)
 }
 
 /**
  * Create a channel of [DragEvent] for [View].
  *
- * *Warning:* The created channel uses [View.setOnDragListener] to emmit drags. Only one channel
- * can be used for a view at a time.
+ * *Warning:* The created channel uses [View.setOnDragListener]. Only one channel can be used at a
+ * time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.drags(scope)
+ *          .consumeEach { /* handle drag */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -102,15 +101,22 @@ fun View.drags(
     capacity: Int = Channel.RENDEZVOUS,
     handled: (DragEvent) -> Boolean = AlwaysTrue
 ): ReceiveChannel<DragEvent> = corbindReceiveChannel(capacity) {
-    setOnDragListener(listener(scope, handled, ::offerElement))
+    setOnDragListener(listener(scope, handled, ::trySend))
     invokeOnClose { setOnDragListener(null) }
 }
 
 /**
  * Create a flow of [DragEvent] for [View].
  *
- * *Warning:* The created flow uses [View.setOnDragListener] to emmit drags. Only one flow can be
- * used for a view at a time.
+ * *Warning:* The created flow uses [View.setOnDragListener]. Only one flow can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * view.drags()
+ *      .onEach { /* handle drag */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  *
  * @param handled Predicate invoked with each value to determine the return value of the underlying
  * [View.OnDragListener]
@@ -119,7 +125,7 @@ fun View.drags(
 fun View.drags(
     handled: (DragEvent) -> Boolean = AlwaysTrue
 ): Flow<DragEvent> = channelFlow {
-    setOnDragListener(listener(this, handled, ::offer))
+    setOnDragListener(listener(this, handled, ::trySend))
     awaitClose { setOnDragListener(null) }
 }
 
@@ -127,14 +133,11 @@ fun View.drags(
 private fun listener(
     scope: CoroutineScope,
     handled: (DragEvent) -> Boolean,
-    emitter: (DragEvent) -> Boolean
+    emitter: (DragEvent) -> Unit
 ) = View.OnDragListener { _, dragEvent ->
-
-    if (scope.isActive) {
-        if (handled(dragEvent)) {
-            emitter(dragEvent)
-            return@OnDragListener true
-        }
+    if (scope.isActive && handled(dragEvent)) {
+        emitter(dragEvent)
+        return@OnDragListener true
     }
     return@OnDragListener false
 }

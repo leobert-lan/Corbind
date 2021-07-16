@@ -28,11 +28,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on refresh events on [SwipeRefreshLayout].
+ *
+ * *Warning:* The created actor uses [SwipeRefreshLayout.setOnRefreshListener]. Only one actor can
+ * be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -43,17 +45,19 @@ fun SwipeRefreshLayout.refreshes(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) {
-
-    val events = scope.actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
+    val events = scope.actor<Unit>(Dispatchers.Main.immediate, capacity) {
+        for (ignored in channel) action()
     }
 
-    setOnRefreshListener(listener(scope, events::offer))
+    setOnRefreshListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnRefreshListener(null) }
 }
 
 /**
- * Perform an action on refresh events on [SwipeRefreshLayout] inside new [CoroutineScope].
+ * Perform an action on refresh events on [SwipeRefreshLayout], inside new [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [SwipeRefreshLayout.setOnRefreshListener]. Only one actor can
+ * be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -62,17 +66,23 @@ suspend fun SwipeRefreshLayout.refreshes(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) = coroutineScope {
-
-    val events = actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
-    }
-
-    setOnRefreshListener(listener(this, events::offer))
-    events.invokeOnClose { setOnRefreshListener(null) }
+    refreshes(this, capacity, action)
 }
 
 /**
  * Create a channel of refresh events on [SwipeRefreshLayout].
+ *
+ * *Warning:* The created channel uses [SwipeRefreshLayout.setOnRefreshListener]. Only one channel
+ * can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      swipeRefreshLayout.refreshes(scope)
+ *          .consumeEach { /* handle refresh */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -82,23 +92,34 @@ fun SwipeRefreshLayout.refreshes(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Unit> = corbindReceiveChannel(capacity) {
-    setOnRefreshListener(listener(scope, ::offerElement))
+    setOnRefreshListener(listener(scope, ::trySend))
     invokeOnClose { setOnRefreshListener(null) }
 }
 
 /**
  * Create a flow of refresh events on [SwipeRefreshLayout].
+ *
+ * *Warning:* The created flow uses [SwipeRefreshLayout.setOnRefreshListener]. Only one flow can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * swipeRefreshLayout.refreshes()
+ *      .onEach { /* handle refresh */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun SwipeRefreshLayout.refreshes(): Flow<Unit> = channelFlow {
-    setOnRefreshListener(listener(this, ::offer))
+    setOnRefreshListener(listener(this, ::trySend))
     awaitClose { setOnRefreshListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Unit) -> Boolean
+    emitter: (Unit) -> Unit
 ) = SwipeRefreshLayout.OnRefreshListener {
     if (scope.isActive) { emitter(Unit) }
 }

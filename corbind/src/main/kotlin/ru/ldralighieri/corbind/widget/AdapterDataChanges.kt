@@ -26,11 +26,11 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on data change events for [Adapter].
@@ -44,19 +44,18 @@ fun <T : Adapter> T.dataChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (T) -> Unit
 ) {
-
-    val events = scope.actor<T>(Dispatchers.Main, capacity) {
+    val events = scope.actor<T>(Dispatchers.Main.immediate, capacity) {
         for (adapter in channel) action(adapter)
     }
 
-    events.offer(this)
-    val dataSetObserver = observer(scope = scope, adapter = this, emitter = events::offer)
+    events.trySend(this)
+    val dataSetObserver = observer(scope, this, events::trySend)
     registerDataSetObserver(dataSetObserver)
     events.invokeOnClose { unregisterDataSetObserver(dataSetObserver) }
 }
 
 /**
- * Perform an action on data change events for [Adapter] inside new [CoroutineScope].
+ * Perform an action on data change events for [Adapter], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -65,20 +64,22 @@ suspend fun <T : Adapter> T.dataChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (T) -> Unit
 ) = coroutineScope {
-
-    val events = actor<T>(Dispatchers.Main, capacity) {
-        for (adapter in channel) action(adapter)
-    }
-
-    events.offer(this@dataChanges)
-    val dataSetObserver = observer(scope = this, adapter = this@dataChanges,
-            emitter = events::offer)
-    registerDataSetObserver(dataSetObserver)
-    events.invokeOnClose { unregisterDataSetObserver(dataSetObserver) }
+    dataChanges(this, capacity, action)
 }
 
 /**
  * Create a channel of data change events for [Adapter].
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      adapter.dataChanges(scope)
+ *          .consumeEach { /* handle data change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -88,8 +89,8 @@ fun <T : Adapter> T.dataChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<T> = corbindReceiveChannel(capacity) {
-    offer(this@dataChanges)
-    val dataSetObserver = observer(scope, this@dataChanges, ::offerElement)
+    trySend(this@dataChanges)
+    val dataSetObserver = observer(scope, this@dataChanges, ::trySend)
     registerDataSetObserver(dataSetObserver)
     invokeOnClose { unregisterDataSetObserver(dataSetObserver) }
 }
@@ -97,21 +98,35 @@ fun <T : Adapter> T.dataChanges(
 /**
  * Create a flow of data change events for [Adapter].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * adapter.dataChanges()
+ *      .onEach { /* handle data change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * adapter.dataChanges()
+ *      .dropInitialValue()
+ *      .onEach { /* handle data change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
-fun <T : Adapter> T.dataChanges(): Flow<T> = channelFlow {
-    offer(this@dataChanges)
-    val dataSetObserver = observer(this, this@dataChanges, ::offer)
+fun <T : Adapter> T.dataChanges(): InitialValueFlow<T> = channelFlow {
+    val dataSetObserver = observer(this, this@dataChanges, ::trySend)
     registerDataSetObserver(dataSetObserver)
     awaitClose { unregisterDataSetObserver(dataSetObserver) }
-}
+}.asInitialValueFlow(this)
 
 @CheckResult
 private fun <T : Adapter> observer(
     scope: CoroutineScope,
     adapter: T,
-    emitter: (T) -> Boolean
+    emitter: (T) -> Unit
 ) = object : DataSetObserver() {
 
     override fun onChanged() {

@@ -28,89 +28,147 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on a new system UI visibility for [View].
  *
- * *Warning:* The created actor uses [View.setOnSystemUiVisibilityChangeListener] to emmit
- * system UI visibility changes. Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnSystemUiVisibilityChangeListener]. Only one actor
+ * can be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
+ *
+ * @deprecated OnSystemUiVisibilityChangeListener is deprecated. Use
+ * {@link WindowInsets#isVisible(int)} to find out about system bar visibilities
  */
+@Suppress("DEPRECATION")
+@Deprecated(
+    message = "OnSystemUiVisibilityChangeListener is deprecated. Use " +
+        "{@link WindowInsets#isVisible(int)} to find out about system bar visibilities",
+    replaceWith = ReplaceWith(
+        expression = "windowInsetsApplyEvents(scope, capacity, action)",
+        imports = ["ru.ldralighieri.corbind.view.windowInsetsApplies"]
+    )
+)
 fun View.systemUiVisibilityChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) {
-
-    val events = scope.actor<Int>(Dispatchers.Main, capacity) {
+    val events = scope.actor<Int>(Dispatchers.Main.immediate, capacity) {
         for (visibility in channel) action(visibility)
     }
 
-    setOnSystemUiVisibilityChangeListener(listener(scope, events::offer))
+    setOnSystemUiVisibilityChangeListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnSystemUiVisibilityChangeListener(null) }
 }
 
 /**
- * Perform an action on a new system UI visibility for [View] inside new [CoroutineScope].
+ * Perform an action on a new system UI visibility for [View], inside new [CoroutineScope].
  *
- * *Warning:* The created actor uses [View.setOnSystemUiVisibilityChangeListener] to emmit
- * system UI visibility changes. Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [View.setOnSystemUiVisibilityChangeListener]. Only one actor
+ * can be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
+ *
+ * @deprecated OnSystemUiVisibilityChangeListener is deprecated. Use
+ * {@link WindowInsets#isVisible(int)} to find out about system bar visibilities
  */
+@Suppress("DEPRECATION")
+@Deprecated(
+    message = "OnSystemUiVisibilityChangeListener is deprecated. Use " +
+        "{@link WindowInsets#isVisible(int)} to find out about system bar visibilities",
+    replaceWith = ReplaceWith(
+        expression = "windowInsetsApplyEvents(capacity, action)",
+        imports = ["ru.ldralighieri.corbind.view.windowInsetsApplies"]
+    )
+)
 suspend fun View.systemUiVisibilityChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) = coroutineScope {
-
-    val events = actor<Int>(Dispatchers.Main, capacity) {
-        for (visibility in channel) action(visibility)
-    }
-
-    setOnSystemUiVisibilityChangeListener(listener(this, events::offer))
-    events.invokeOnClose { setOnSystemUiVisibilityChangeListener(null) }
+    systemUiVisibilityChanges(this, capacity, action)
 }
 
 /**
  * Create a channel of integers representing a new system UI visibility for [View].
  *
- * *Warning:* The created channel uses [View.setOnSystemUiVisibilityChangeListener] to emmit
- * system UI visibility changes. Only one channel can be used for a view at a time.
+ * *Warning:* The created channel uses [View.setOnSystemUiVisibilityChangeListener]. Only one
+ * channel can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.systemUiVisibilityChanges(scope)
+ *          .consumeEach { /* handle system UI visibility */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
+ *
+ * @deprecated OnSystemUiVisibilityChangeListener is deprecated. Use
+ * {@link WindowInsets#isVisible(int)} to find out about system bar visibilities
  */
+@Suppress("DEPRECATION")
+@Deprecated(
+    message = "OnSystemUiVisibilityChangeListener is deprecated. Use " +
+        "{@link WindowInsets#isVisible(int)} to find out about system bar visibilities",
+    replaceWith = ReplaceWith(
+        expression = "windowInsetsApplyEvents(scope, capacity)",
+        imports = ["ru.ldralighieri.corbind.view.windowInsetsApplies"]
+    )
+)
 @CheckResult
 fun View.systemUiVisibilityChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Int> = corbindReceiveChannel(capacity) {
-    setOnSystemUiVisibilityChangeListener(listener(scope, ::offerElement))
+    setOnSystemUiVisibilityChangeListener(listener(scope, ::trySend))
     invokeOnClose { setOnSystemUiVisibilityChangeListener(null) }
 }
 
 /**
  * Create a flow of integers representing a new system UI visibility for [View].
  *
- * *Warning:* The created flow uses [View.setOnSystemUiVisibilityChangeListener] to emmit
- * system UI visibility changes. Only one flow can be used for a view at a time.
+ * *Warning:* The created flow uses [View.setOnSystemUiVisibilityChangeListener]. Only one flow can
+ * be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * view.systemUiVisibilityChanges()
+ *      .onEach { /* handle system UI visibility */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
+ *
+ * @deprecated OnSystemUiVisibilityChangeListener is deprecated. Use
+ * {@link WindowInsets#isVisible(int)} to find out about system bar visibilities
  */
+@Suppress("DEPRECATION")
+@Deprecated(
+    message = "OnSystemUiVisibilityChangeListener is deprecated. Use " +
+        "{@link WindowInsets#isVisible(int)} to find out about system bar visibilities",
+    replaceWith = ReplaceWith(
+        expression = "windowInsetsApplyEvents()",
+        imports = ["ru.ldralighieri.corbind.view.windowInsetsApplies"]
+    )
+)
 @CheckResult
 fun View.systemUiVisibilityChanges(): Flow<Int> = channelFlow {
-    setOnSystemUiVisibilityChangeListener(listener(this, ::offer))
+    setOnSystemUiVisibilityChangeListener(listener(this, ::trySend))
     awaitClose { setOnSystemUiVisibilityChangeListener(null) }
 }
 
+@Suppress("DEPRECATION")
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Int) -> Boolean
+    emitter: (Int) -> Unit
 ) = View.OnSystemUiVisibilityChangeListener {
     if (scope.isActive) { emitter(it) }
 }

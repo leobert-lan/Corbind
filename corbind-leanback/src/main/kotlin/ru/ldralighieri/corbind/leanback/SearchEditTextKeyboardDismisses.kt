@@ -28,11 +28,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on the keyboard dismiss events from [SearchEditText].
+ *
+ * *Warning:* The created actor uses [SearchEditText.setOnKeyboardDismissListener]. Only one actor
+ * can be used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -43,18 +45,20 @@ fun SearchEditText.keyboardDismisses(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) {
-
-    val events = scope.actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
+    val events = scope.actor<Unit>(Dispatchers.Main.immediate, capacity) {
+        for (ignored in channel) action()
     }
 
-    setOnKeyboardDismissListener(listener(scope, events::offer))
+    setOnKeyboardDismissListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnKeyboardDismissListener(null) }
 }
 
 /**
- * Perform an action on the keyboard dismiss events from [SearchEditText] inside new
+ * Perform an action on the keyboard dismiss events from [SearchEditText], inside new
  * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [SearchEditText.setOnKeyboardDismissListener]. Only one actor
+ * can be used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -63,17 +67,23 @@ suspend fun SearchEditText.keyboardDismisses(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend () -> Unit
 ) = coroutineScope {
-
-    val events = actor<Unit>(Dispatchers.Main, capacity) {
-        for (unit in channel) action()
-    }
-
-    setOnKeyboardDismissListener(listener(this, events::offer))
-    events.invokeOnClose { setOnKeyboardDismissListener(null) }
+    keyboardDismisses(this, capacity, action)
 }
 
 /**
  * Create a channel which emits the keyboard dismiss events from [SearchEditText].
+ *
+ * *Warning:* The created channel uses [SearchEditText.setOnKeyboardDismissListener]. Only one
+ * channel can be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      searchEditText.keyboardDismisses(scope)
+ *          .consumeEach { /* handle keyboard dismiss */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -83,23 +93,34 @@ fun SearchEditText.keyboardDismisses(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Unit> = corbindReceiveChannel(capacity) {
-    setOnKeyboardDismissListener(listener(scope, ::offerElement))
+    setOnKeyboardDismissListener(listener(scope, ::trySend))
     invokeOnClose { setOnKeyboardDismissListener(null) }
 }
 
 /**
  * Create a flow which emits the keyboard dismiss events from [SearchEditText].
+ *
+ * *Warning:* The created flow uses [SearchEditText.setOnKeyboardDismissListener]. Only one flow can
+ * be used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * searchEditText.keyboardDismisses()
+ *      .onEach { /* handle keyboard dismiss */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun SearchEditText.keyboardDismisses(): Flow<Unit> = channelFlow {
-    setOnKeyboardDismissListener(listener(this, ::offer))
+    setOnKeyboardDismissListener(listener(this, ::trySend))
     awaitClose { setOnKeyboardDismissListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Unit) -> Boolean
+    emitter: (Unit) -> Unit
 ) = SearchEditText.OnKeyboardDismissListener {
     if (scope.isActive) { emitter(Unit) }
 }

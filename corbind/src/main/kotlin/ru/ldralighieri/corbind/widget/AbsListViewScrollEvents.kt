@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 data class AbsListViewScrollEvent(
     val view: AbsListView,
@@ -40,10 +39,10 @@ data class AbsListViewScrollEvent(
 )
 
 /**
- * Perform an action on scroll events on [AbsListView].
+ * Perform an action on [scroll events][AbsListViewScrollEvent] on [AbsListView].
  *
- * *Warning:* The created actor uses [AbsListView.setOnScrollListener] to emmit scroll changes.
- * Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [AbsListView.setOnScrollListener]. Only one actor can be used
+ * at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -54,20 +53,20 @@ fun AbsListView.scrollEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (AbsListViewScrollEvent) -> Unit
 ) {
-
-    val events = scope.actor<AbsListViewScrollEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<AbsListViewScrollEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    setOnScrollListener(listener(scope, events::offer))
+    setOnScrollListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnScrollListener(null) }
 }
 
 /**
- * Perform an action on scroll events on [AbsListView] inside new CoroutineScope.
+ * Perform an action on [scroll events][AbsListViewScrollEvent] on [AbsListView], inside new
+ * [CoroutineScope].
  *
- * *Warning:* The created actor uses [AbsListView.setOnScrollListener] to emmit scroll changes.
- * Only one actor can be used for a view at a time.
+ * *Warning:* The created actor uses [AbsListView.setOnScrollListener]. Only one actor can be used
+ * at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -76,20 +75,23 @@ suspend fun AbsListView.scrollEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (AbsListViewScrollEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<AbsListViewScrollEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    setOnScrollListener(listener(this, events::offer))
-    events.invokeOnClose { setOnScrollListener(null) }
+    scrollEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of scroll events on [AbsListView].
+ * Create a channel of [scroll events][AbsListViewScrollEvent] on [AbsListView].
  *
- * *Warning:* The created channel uses [AbsListView.setOnScrollListener] to emmit scroll changes.
- * Only one channel can be used for a view at a time.
+ * *Warning:* The created channel uses [AbsListView.setOnScrollListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      absListView.scrollEvents(scope)
+ *          .consumeEach { /* handle list scroll event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -99,26 +101,34 @@ fun AbsListView.scrollEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<AbsListViewScrollEvent> = corbindReceiveChannel(capacity) {
-    setOnScrollListener(listener(scope, ::offerElement))
+    setOnScrollListener(listener(scope, ::trySend))
     invokeOnClose { setOnScrollListener(null) }
 }
 
 /**
- * Create a flow of scroll events on [AbsListView].
+ * Create a flow of [scroll events][AbsListViewScrollEvent] on [AbsListView].
  *
- * *Warning:* The created flow uses [AbsListView.setOnScrollListener] to emmit scroll changes.
- * Only one flow can be used for a view at a time.
+ * *Warning:* The created flow uses [AbsListView.setOnScrollListener]. Only one flow can be used at
+ * a time.
+ *
+ * Example:
+ *
+ * ```
+ * absListView.scrollEvents()
+ *      .onEach { /* handle list scroll event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun AbsListView.scrollEvents(): Flow<AbsListViewScrollEvent> = channelFlow {
-    setOnScrollListener(listener(this, ::offer))
+    setOnScrollListener(listener(this, ::trySend))
     awaitClose { setOnScrollListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (AbsListViewScrollEvent) -> Boolean
+    emitter: (AbsListViewScrollEvent) -> Unit
 ) = object : AbsListView.OnScrollListener {
 
     private var currentScrollState = AbsListView.OnScrollListener.SCROLL_STATE_IDLE
@@ -126,8 +136,10 @@ private fun listener(
     override fun onScrollStateChanged(absListView: AbsListView, scrollState: Int) {
         currentScrollState = scrollState
         if (scope.isActive) {
-            val event = AbsListViewScrollEvent(absListView, scrollState,
-                    absListView.firstVisiblePosition, absListView.childCount, absListView.count)
+            val event = AbsListViewScrollEvent(
+                absListView, scrollState,
+                absListView.firstVisiblePosition, absListView.childCount, absListView.count
+            )
             emitter(event)
         }
     }
@@ -139,8 +151,10 @@ private fun listener(
         totalItemCount: Int
     ) {
         if (scope.isActive) {
-            val event = AbsListViewScrollEvent(absListView, currentScrollState, firstVisibleItem,
-                    visibleItemCount, totalItemCount)
+            val event = AbsListViewScrollEvent(
+                absListView, currentScrollState, firstVisibleItem,
+                visibleItemCount, totalItemCount
+            )
             emitter(event)
         }
     }

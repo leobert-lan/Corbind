@@ -28,13 +28,19 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
-data class RecyclerViewFlingEvent(val view: RecyclerView, val velocityX: Int, val velocityY: Int)
+data class RecyclerViewFlingEvent(
+    val view: RecyclerView,
+    val velocityX: Int,
+    val velocityY: Int
+)
 
 /**
- * Perform an action on fling events on [RecyclerView].
+ * Perform an action on [fling events][RecyclerViewFlingEvent] on [RecyclerView].
+ *
+ * *Warning:* The created actor uses [RecyclerView.setOnFlingListener]. Only one actor can be used
+ * at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -45,17 +51,20 @@ fun RecyclerView.flingEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (RecyclerViewFlingEvent) -> Unit
 ) {
-
-    val events = scope.actor<RecyclerViewFlingEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<RecyclerViewFlingEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    onFlingListener = listener(scope = scope, recyclerView = this, emitter = events::offer)
+    onFlingListener = listener(scope, this, events::trySend)
     events.invokeOnClose { onFlingListener = null }
 }
 
 /**
- * Perform an action on fling events on [RecyclerView] inside new [CoroutineScope].
+ * Perform an action on [fling events][RecyclerViewFlingEvent] on [RecyclerView], inside new
+ * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [RecyclerView.setOnFlingListener]. Only one actor can be used
+ * at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -64,18 +73,23 @@ suspend fun RecyclerView.flingEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (RecyclerViewFlingEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<RecyclerViewFlingEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    onFlingListener = listener(scope = this, recyclerView = this@flingEvents,
-            emitter = events::offer)
-    events.invokeOnClose { onFlingListener = null }
+    flingEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of fling events on [RecyclerView].
+ * Create a channel of [fling events][RecyclerViewFlingEvent] on [RecyclerView].
+ *
+ * *Warning:* The created channel uses [RecyclerView.setOnFlingListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      recyclerView.flingEvents(scope)
+ *          .consumeEach { /* handle fling event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -85,16 +99,27 @@ fun RecyclerView.flingEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<RecyclerViewFlingEvent> = corbindReceiveChannel(capacity) {
-    onFlingListener = listener(scope, this@flingEvents, ::offerElement)
+    onFlingListener = listener(scope, this@flingEvents, ::trySend)
     invokeOnClose { onFlingListener = null }
 }
 
 /**
- * Create a flow of fling events on [RecyclerView].
+ * Create a flow of [fling events][RecyclerViewFlingEvent] on [RecyclerView].
+ *
+ * *Warning:* The created flow uses [RecyclerView.setOnFlingListener]. Only one flow can be used at
+ * a time.
+ *
+ * Example:
+ *
+ * ```
+ * recyclerView.flingEvents()
+ *      .onEach { /* handle fling event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun RecyclerView.flingEvents(): Flow<RecyclerViewFlingEvent> = channelFlow {
-    onFlingListener = listener(this, this@flingEvents, ::offer)
+    onFlingListener = listener(this, this@flingEvents, ::trySend)
     awaitClose { onFlingListener = null }
 }
 
@@ -102,7 +127,7 @@ fun RecyclerView.flingEvents(): Flow<RecyclerViewFlingEvent> = channelFlow {
 private fun listener(
     scope: CoroutineScope,
     recyclerView: RecyclerView,
-    emitter: (RecyclerViewFlingEvent) -> Boolean
+    emitter: (RecyclerViewFlingEvent) -> Unit
 ) = object : RecyclerView.OnFlingListener() {
 
     override fun onFling(velocityX: Int, velocityY: Int): Boolean {

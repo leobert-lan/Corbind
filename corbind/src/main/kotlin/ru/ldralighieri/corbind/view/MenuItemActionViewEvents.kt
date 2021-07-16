@@ -29,8 +29,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
 import ru.ldralighieri.corbind.internal.AlwaysTrue
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 sealed class MenuItemActionViewEvent {
     abstract val menuItem: MenuItem
@@ -45,10 +44,10 @@ data class MenuItemActionViewExpandEvent(
 ) : MenuItemActionViewEvent()
 
 /**
- * Perform an action on action view events for [MenuItem].
+ * Perform an action on [action view events][MenuItemActionViewEvent] for [MenuItem].
  *
- * *Warning:* The created actor uses [MenuItem.setOnActionExpandListener] to emmit action view
- * events. Only one actor can be used for a menu item at a time.
+ * *Warning:* The created actor uses [MenuItem.setOnActionExpandListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -60,22 +59,22 @@ fun MenuItem.actionViewEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS,
     handled: (MenuItemActionViewEvent) -> Boolean = AlwaysTrue,
-    action: suspend (MenuItemActionViewEvent) -> Boolean
+    action: suspend (MenuItemActionViewEvent) -> Unit
 ) {
-
-    val events = scope.actor<MenuItemActionViewEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<MenuItemActionViewEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    setOnActionExpandListener(listener(scope, handled, events::offer))
+    setOnActionExpandListener(listener(scope, handled, events::trySend))
     events.invokeOnClose { setOnActionExpandListener(null) }
 }
 
 /**
- * Perform an action on action view events for [MenuItem] inside new [CoroutineScope].
+ * Perform an action on [action view events][MenuItemActionViewEvent] for [MenuItem], inside new
+ * [CoroutineScope].
  *
- * *Warning:* The created actor uses [MenuItem.setOnActionExpandListener] to emmit action view
- * events. Only one actor can be used for a menu item at a time.
+ * *Warning:* The created actor uses [MenuItem.setOnActionExpandListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param handled Function invoked with each value to determine the return value of the underlying
@@ -87,20 +86,36 @@ suspend fun MenuItem.actionViewEvents(
     handled: (MenuItemActionViewEvent) -> Boolean = AlwaysTrue,
     action: suspend (MenuItemActionViewEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<MenuItemActionViewEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    setOnActionExpandListener(listener(this, handled, events::offer))
-    events.invokeOnClose { setOnActionExpandListener(null) }
+    actionViewEvents(this, capacity, handled, action)
 }
 
 /**
- * Create a channel of action view events for [MenuItem].
+ * Create a channel of [action view events][MenuItemActionViewEvent] for [MenuItem].
  *
- * *Warning:* The created channel uses [MenuItem.setOnActionExpandListener] to emmit action view
- * events. Only one channel can be used for a menu item at a time.
+ * *Warning:* The created channel uses [MenuItem.setOnActionExpandListener]. Only one channel can be
+ * used at a time.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * launch {
+ *      menuItem.actionViewEvents(scope)
+ *          .consumeEach { event ->
+ *              when (event) {
+ *                  is MenuItemActionViewCollapseEvent -> { /* handle collapse event */ }
+ *                  is MenuItemActionViewExpandEvent -> { /* handle expand event */ }
+ *              }
+ *          }
+ * }
+ *
+ * // handle one event
+ * launch {
+ *      menuItem.actionViewEvents(scope)
+ *          .filterIsInstance<MenuItemActionViewCollapseEvent>()
+ *          .consumeEach { /* handle collapse event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -113,15 +128,35 @@ fun MenuItem.actionViewEvents(
     capacity: Int = Channel.RENDEZVOUS,
     handled: (MenuItemActionViewEvent) -> Boolean = AlwaysTrue
 ): ReceiveChannel<MenuItemActionViewEvent> = corbindReceiveChannel(capacity) {
-    setOnActionExpandListener(listener(scope, handled, ::offerElement))
+    setOnActionExpandListener(listener(scope, handled, ::trySend))
     invokeOnClose { setOnActionExpandListener(null) }
 }
 
 /**
- * Create a flow of action view events for [MenuItem].
+ * Create a flow of [action view events][MenuItemActionViewEvent] for [MenuItem].
  *
- * *Warning:* The created flow uses [MenuItem.setOnActionExpandListener] to emmit action view
- * events. Only one flow can be used for a menu item at a time.
+ * *Warning:* The created flow uses [MenuItem.setOnActionExpandListener]. Only one flow can be used
+ * at a time.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * menuItem.actionViewEvents()
+ *      .onEach { event ->
+ *          when (event) {
+ *              is MenuItemActionViewCollapseEvent -> { /* handle collapse event */ }
+ *              is MenuItemActionViewExpandEvent -> { /* handle expand event */ }
+ *          }
+ *      }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // handle one event
+ * menuItem.actionViewEvents()
+ *      .filterIsInstance<MenuItemActionViewCollapseEvent>()
+ *      .onEach { /* handle collapse event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  *
  * @param handled Function invoked with each value to determine the return value of the underlying
  * [MenuItem.OnActionExpandListener]
@@ -130,7 +165,7 @@ fun MenuItem.actionViewEvents(
 fun MenuItem.actionViewEvents(
     handled: (MenuItemActionViewEvent) -> Boolean = AlwaysTrue
 ): Flow<MenuItemActionViewEvent> = channelFlow {
-    setOnActionExpandListener(listener(this, handled, ::offer))
+    setOnActionExpandListener(listener(this, handled, ::trySend))
     awaitClose { setOnActionExpandListener(null) }
 }
 
@@ -138,7 +173,7 @@ fun MenuItem.actionViewEvents(
 private fun listener(
     scope: CoroutineScope,
     handled: (MenuItemActionViewEvent) -> Boolean,
-    emitter: (MenuItemActionViewEvent) -> Boolean
+    emitter: (MenuItemActionViewEvent) -> Unit
 ) = object : MenuItem.OnActionExpandListener {
 
     override fun onMenuItemActionExpand(item: MenuItem): Boolean {
@@ -150,11 +185,9 @@ private fun listener(
     }
 
     private fun onEvent(event: MenuItemActionViewEvent): Boolean {
-        if (scope.isActive) {
-            if (handled(event)) {
-                emitter(event)
-                return true
-            }
+        if (scope.isActive && handled(event)) {
+            emitter(event)
+            return true
         }
         return false
     }

@@ -28,8 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on the offset change in [AppBarLayout].
@@ -43,18 +42,17 @@ fun AppBarLayout.offsetChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) {
-
-    val events = scope.actor<Int>(Dispatchers.Main, capacity) {
+    val events = scope.actor<Int>(Dispatchers.Main.immediate, capacity) {
         for (offset in channel) action(offset)
     }
 
-    val listener = listener(scope, events::offer)
+    val listener = listener(scope, events::trySend)
     addOnOffsetChangedListener(listener)
     events.invokeOnClose { removeOnOffsetChangedListener(listener) }
 }
 
 /**
- * Perform an action on the offset change in [AppBarLayout] inside new [CoroutineScope].
+ * Perform an action on the offset change in [AppBarLayout], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -63,18 +61,20 @@ suspend fun AppBarLayout.offsetChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (Int) -> Unit
 ) = coroutineScope {
-
-    val events = actor<Int>(Dispatchers.Main, capacity) {
-        for (offset in channel) action(offset)
-    }
-
-    val listener = listener(this, events::offer)
-    addOnOffsetChangedListener(listener)
-    events.invokeOnClose { removeOnOffsetChangedListener(listener) }
+    offsetChanges(this, capacity, action)
 }
 
 /**
  * Create a channel which emits the offset change in [AppBarLayout].
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      appBarLayout.offsetChanges(scope)
+ *          .consumeEach { /* handle offset change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -84,17 +84,25 @@ fun AppBarLayout.offsetChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<Int> = corbindReceiveChannel(capacity) {
-    val listener = listener(scope, ::offerElement)
+    val listener = listener(scope, ::trySend)
     addOnOffsetChangedListener(listener)
     invokeOnClose { removeOnOffsetChangedListener(listener) }
 }
 
 /**
  * Create a flow which emits the offset change in [AppBarLayout].
+ *
+ * Example:
+ *
+ * ```
+ * appBarLayout.offsetChanges()
+ *      .onEach { /* handle offset change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun AppBarLayout.offsetChanges(): Flow<Int> = channelFlow {
-    val listener = listener(this, ::offer)
+    val listener = listener(this, ::trySend)
     addOnOffsetChangedListener(listener)
     awaitClose { removeOnOffsetChangedListener(listener) }
 }
@@ -102,7 +110,7 @@ fun AppBarLayout.offsetChanges(): Flow<Int> = channelFlow {
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (Int) -> Boolean
+    emitter: (Int) -> Unit
 ) = AppBarLayout.OnOffsetChangedListener { _, verticalOffset ->
     if (scope.isActive) { emitter(verticalOffset) }
 }

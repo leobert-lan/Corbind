@@ -25,14 +25,17 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on character sequences for query text changes on [SearchView].
+ *
+ * *Warning:* The created actor uses [SearchView.setOnQueryTextListener]. Only one actor can be used
+ * at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -43,19 +46,21 @@ fun SearchView.queryTextChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (CharSequence) -> Unit
 ) {
-
-    val events = scope.actor<CharSequence>(Dispatchers.Main, capacity) {
+    val events = scope.actor<CharSequence>(Dispatchers.Main.immediate, capacity) {
         for (chars in channel) action(chars)
     }
 
-    events.offer(query)
-    setOnQueryTextListener(listener(scope, events::offer))
+    events.trySend(query)
+    setOnQueryTextListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnQueryTextListener(null) }
 }
 
 /**
- * Perform an action on character sequences for query text changes on [SearchView] inside new
+ * Perform an action on character sequences for query text changes on [SearchView], inside new
  * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [SearchView.setOnQueryTextListener]. Only one actor can be used
+ * at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -64,18 +69,25 @@ suspend fun SearchView.queryTextChanges(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (CharSequence) -> Unit
 ) = coroutineScope {
-
-    val events = actor<CharSequence>(Dispatchers.Main, capacity) {
-        for (chars in channel) action(chars)
-    }
-
-    events.offer(query)
-    setOnQueryTextListener(listener(this, events::offer))
-    events.invokeOnClose { setOnQueryTextListener(null) }
+    queryTextChanges(this, capacity, action)
 }
 
 /**
  * Create an observable of character sequences for query text changes on [SearchView].
+ *
+ * *Warning:* The created channel uses [SearchView.setOnQueryTextListener]. Only one channel can be
+ * used at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      searchView.queryTextChanges(scope)
+ *          .consumeEach { /* handle query text change */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -85,27 +97,44 @@ fun SearchView.queryTextChanges(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<CharSequence> = corbindReceiveChannel(capacity) {
-    offerElement(query)
-    setOnQueryTextListener(listener(scope, ::offerElement))
+    trySend(query)
+    setOnQueryTextListener(listener(scope, ::trySend))
     invokeOnClose { setOnQueryTextListener(null) }
 }
 
 /**
  * Create an observable of character sequences for query text changes on [SearchView].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Warning:* The created flow uses [SearchView.setOnQueryTextListener]. Only one flow can be used
+ * at a time.
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * searchView.queryTextChanges()
+ *      .onEach { /* handle query text change */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * searchView.queryTextChanges()
+ *      .dropInitialValue()
+ *      .onEach { /* handle query text change */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun SearchView.queryTextChanges(): Flow<CharSequence> = channelFlow {
-    offer(query)
-    setOnQueryTextListener(listener(this, ::offer))
+fun SearchView.queryTextChanges(): InitialValueFlow<CharSequence> = channelFlow {
+    setOnQueryTextListener(listener(this, ::trySend))
     awaitClose { setOnQueryTextListener(null) }
-}
+}.asInitialValueFlow(query)
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (CharSequence) -> Boolean
+    emitter: (CharSequence) -> Unit
 ) = object : SearchView.OnQueryTextListener {
 
     override fun onQueryTextChange(s: String): Boolean {

@@ -27,11 +27,11 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.InitialValueFlow
+import ru.ldralighieri.corbind.internal.asInitialValueFlow
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 data class TextViewAfterTextChangeEvent(
     val view: TextView,
@@ -39,7 +39,7 @@ data class TextViewAfterTextChangeEvent(
 )
 
 /**
- * Perform an action after text change events for [TextView].
+ * Perform an action [after text change events][TextViewAfterTextChangeEvent] for [TextView].
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -50,19 +50,19 @@ fun TextView.afterTextChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (TextViewAfterTextChangeEvent) -> Unit
 ) {
-
-    val events = scope.actor<TextViewAfterTextChangeEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<TextViewAfterTextChangeEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    events.offer(initialValue(this))
-    val listener = listener(scope = scope, textView = this, emitter = events::offer)
+    events.trySend(initialValue(this))
+    val listener = listener(scope, this, events::trySend)
     addTextChangedListener(listener)
     events.invokeOnClose { removeTextChangedListener(listener) }
 }
 
 /**
- * Perform an action after text change events for [TextView] inside new [CoroutineScope].
+ * Perform an action [after text change events][TextViewAfterTextChangeEvent] for [TextView], inside
+ * new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -71,20 +71,22 @@ suspend fun TextView.afterTextChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (TextViewAfterTextChangeEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<TextViewAfterTextChangeEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    events.offer(initialValue(this@afterTextChangeEvents))
-    val listener = listener(scope = this, textView = this@afterTextChangeEvents,
-            emitter = events::offer)
-    addTextChangedListener(listener)
-    events.invokeOnClose { removeTextChangedListener(listener) }
+    afterTextChangeEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of after text change events for [TextView].
+ * Create a channel of [after text change events][TextViewAfterTextChangeEvent] for [TextView].
+ *
+ * *Note:* A value will be emitted immediately.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      textView.afterTextChangeEvents(scope)
+ *          .consumeEach { /* handle after text change event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -94,37 +96,52 @@ fun TextView.afterTextChangeEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<TextViewAfterTextChangeEvent> = corbindReceiveChannel(capacity) {
-    offerElement(initialValue(this@afterTextChangeEvents))
-    val listener = listener(scope, this@afterTextChangeEvents, ::offerElement)
+    trySend(initialValue(this@afterTextChangeEvents))
+    val listener = listener(scope, this@afterTextChangeEvents, ::trySend)
     addTextChangedListener(listener)
     invokeOnClose { removeTextChangedListener(listener) }
 }
 
 /**
- * Create a channel of after text change events for [TextView].
+ * Create a flow of [after text change events][TextViewAfterTextChangeEvent] for [TextView].
  *
- * *Note:* A value will be emitted immediately on collect.
+ * *Note:* A value will be emitted immediately.
+ *
+ * Examples:
+ *
+ * ```
+ * // handle initial value
+ * textView.afterTextChangeEvents()
+ *      .onEach { /* handle after text change event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // drop initial value
+ * textView.afterTextChangeEvents()
+ *      .dropInitialValue()
+ *      .onEach { /* handle after text change event */ }
+ *      .launchIn(lifecycleScope)
+ * ```
  */
 @CheckResult
-fun TextView.afterTextChangeEvents(): Flow<TextViewAfterTextChangeEvent> = channelFlow {
-    offer(initialValue(this@afterTextChangeEvents))
-    val listener = listener(this, this@afterTextChangeEvents, ::offer)
+fun TextView.afterTextChangeEvents(): InitialValueFlow<TextViewAfterTextChangeEvent> = channelFlow {
+    val listener = listener(this, this@afterTextChangeEvents, ::trySend)
+    addTextChangedListener(listener)
     awaitClose { removeTextChangedListener(listener) }
-}
+}.asInitialValueFlow(initialValue(textView = this))
 
 @CheckResult
 private fun initialValue(textView: TextView): TextViewAfterTextChangeEvent =
-        TextViewAfterTextChangeEvent(textView, textView.editableText)
+    TextViewAfterTextChangeEvent(textView, textView.editableText)
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
     textView: TextView,
-    emitter: (TextViewAfterTextChangeEvent) -> Boolean
+    emitter: (TextViewAfterTextChangeEvent) -> Unit
 ) = object : TextWatcher {
 
-    override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) { }
-    override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) { }
+    override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) = Unit
+    override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) = Unit
 
     override fun afterTextChanged(s: Editable) {
         if (scope.isActive) { emitter(TextViewAfterTextChangeEvent(textView, s)) }

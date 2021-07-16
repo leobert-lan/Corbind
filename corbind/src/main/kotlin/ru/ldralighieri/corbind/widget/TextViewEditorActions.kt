@@ -29,14 +29,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
 import ru.ldralighieri.corbind.internal.AlwaysTrue
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 /**
  * Perform an action on editor actions on [TextView].
  *
- * *Warning:* The created actor uses [TextView.OnEditorActionListener] to emmit actions. Only one
- * actor can be used for a view at a time.
+ * *Warning:* The created actor uses [TextView.setOnEditorActionListener]. Only one actor can be
+ * used at a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -50,20 +49,19 @@ fun TextView.editorActions(
     handled: (Int) -> Boolean = AlwaysTrue,
     action: suspend (Int) -> Unit
 ) {
-
-    val events = scope.actor<Int>(Dispatchers.Main, capacity) {
+    val events = scope.actor<Int>(Dispatchers.Main.immediate, capacity) {
         for (actionId in channel) action(actionId)
     }
 
-    setOnEditorActionListener(listener(scope, handled, events::offer))
+    setOnEditorActionListener(listener(scope, handled, events::trySend))
     events.invokeOnClose { setOnEditorActionListener(null) }
 }
 
 /**
- * Perform an action on editor actions on [TextView] inside new [CoroutineScope].
+ * Perform an action on editor actions on [TextView], inside new [CoroutineScope].
  *
- * *Warning:* The created actor uses [TextView.OnEditorActionListener] to emmit actions. Only one
- * actor can be used for a view at a time.
+ * *Warning:* The created actor uses [TextView.setOnEditorActionListener]. Only one actor can be
+ * used at a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
@@ -75,20 +73,23 @@ suspend fun TextView.editorActions(
     handled: (Int) -> Boolean = AlwaysTrue,
     action: suspend (Int) -> Unit
 ) = coroutineScope {
-
-    val events = actor<Int>(Dispatchers.Main, capacity) {
-        for (actionId in channel) action(actionId)
-    }
-
-    setOnEditorActionListener(listener(this, handled, events::offer))
-    events.invokeOnClose { setOnEditorActionListener(null) }
+    editorActions(this, capacity, handled, action)
 }
 
 /**
  * Create a channel of editor actions on [TextView].
  *
- * *Warning:* The created channel uses [TextView.OnEditorActionListener] to emmit actions. Only
- * one channel can be used for a view at a time.
+ * *Warning:* The created channel uses [TextView.setOnEditorActionListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.hovers(scope)
+ *          .consumeEach { /* handle action */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -101,24 +102,30 @@ fun TextView.editorActions(
     capacity: Int = Channel.RENDEZVOUS,
     handled: (Int) -> Boolean = AlwaysTrue
 ): ReceiveChannel<Int> = corbindReceiveChannel(capacity) {
-    setOnEditorActionListener(listener(scope, handled, ::offerElement))
+    setOnEditorActionListener(listener(scope, handled, ::trySend))
     invokeOnClose { setOnEditorActionListener(null) }
 }
 
 /**
  * Create a flow of editor actions on [TextView].
  *
- * *Warning:* The created flow uses [TextView.OnEditorActionListener] to emmit actions. Only one
- * flow can be used for a view at a time.
+ * *Warning:* The created flow uses [TextView.setOnEditorActionListener]. Only one flow can be used
+ * at a time.
+ *
+ * Example:
+ *
+ * ```
+ * textView.editorActions()
+ *      .onEach { /* handle action */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  *
  * @param handled Predicate invoked each occurrence to determine the return value of the underlying
  * [TextView.OnEditorActionListener].
  */
 @CheckResult
-fun TextView.editorActions(
-    handled: (Int) -> Boolean = AlwaysTrue
-): Flow<Int> = channelFlow {
-    setOnEditorActionListener(listener(this, handled, ::offer))
+fun TextView.editorActions(handled: (Int) -> Boolean = AlwaysTrue): Flow<Int> = channelFlow {
+    setOnEditorActionListener(listener(this, handled, ::trySend))
     awaitClose { setOnEditorActionListener(null) }
 }
 
@@ -126,9 +133,8 @@ fun TextView.editorActions(
 private fun listener(
     scope: CoroutineScope,
     handled: (Int) -> Boolean,
-    emitter: (Int) -> Boolean
+    emitter: (Int) -> Unit
 ) = TextView.OnEditorActionListener { _, actionId, _ ->
-
     if (scope.isActive && handled(actionId)) {
         emitter(actionId)
         return@OnEditorActionListener true

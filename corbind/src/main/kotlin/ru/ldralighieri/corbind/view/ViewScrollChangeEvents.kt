@@ -30,8 +30,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 data class ViewScrollChangeEvent(
     val view: View,
@@ -42,7 +41,10 @@ data class ViewScrollChangeEvent(
 )
 
 /**
- * Perform an action on scroll-change events for [View].
+ * Perform an action on [scroll change events][ViewScrollChangeEvent] for [View].
+ *
+ * *Warning:* The created actor uses [View.setOnScrollChangeListener]. Only one actor can be used at
+ * a time.
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -54,17 +56,20 @@ fun View.scrollChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (ViewScrollChangeEvent) -> Unit
 ) {
-
-    val events = scope.actor<ViewScrollChangeEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<ViewScrollChangeEvent>(Dispatchers.Main.immediate, capacity) {
         for (event in channel) action(event)
     }
 
-    setOnScrollChangeListener(listener(scope, events::offer))
+    setOnScrollChangeListener(listener(scope, events::trySend))
     events.invokeOnClose { setOnScrollChangeListener(null) }
 }
 
 /**
- * Perform an action on scroll-change events for [View] inside new [CoroutineScope].
+ * Perform an action on [scroll change events][ViewScrollChangeEvent] for [View], inside new
+ * [CoroutineScope].
+ *
+ * *Warning:* The created actor uses [View.setOnScrollChangeListener]. Only one actor can be used at
+ * a time.
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -74,17 +79,23 @@ suspend fun View.scrollChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (ViewScrollChangeEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<ViewScrollChangeEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    setOnScrollChangeListener(listener(this, events::offer))
-    events.invokeOnClose { setOnScrollChangeListener(null) }
+    scrollChangeEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of scroll-change events for [View].
+ * Create a channel of [scroll change events][ViewScrollChangeEvent] for [View].
+ *
+ * *Warning:* The created channel uses [View.setOnScrollChangeListener]. Only one channel can be
+ * used at a time.
+ *
+ * Example:
+ *
+ * ```
+ * launch {
+ *      view.scrollChangeEvents(scope)
+ *          .consumeEach { /* handle scroll change event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -95,24 +106,35 @@ fun View.scrollChangeEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<ViewScrollChangeEvent> = corbindReceiveChannel(capacity) {
-    setOnScrollChangeListener(listener(scope, ::offerElement))
+    setOnScrollChangeListener(listener(scope, ::trySend))
     invokeOnClose { setOnScrollChangeListener(null) }
 }
 
 /**
- * Create a flow of scroll-change events for [View].
+ * Create a flow of [scroll change events][ViewScrollChangeEvent] for [View].
+ *
+ * *Warning:* The created flow uses [View.setOnScrollChangeListener]. Only one flow can be used at a
+ * time.
+ *
+ * Example:
+ *
+ * ```
+ * view.scrollChangeEvents()
+ *      .onEach { /* handle scroll change event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @RequiresApi(Build.VERSION_CODES.M)
 @CheckResult
 fun View.scrollChangeEvents(): Flow<ViewScrollChangeEvent> = channelFlow {
-    setOnScrollChangeListener(listener(this, ::offer))
+    setOnScrollChangeListener(listener(this, ::trySend))
     awaitClose { setOnScrollChangeListener(null) }
 }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
-    emitter: (ViewScrollChangeEvent) -> Boolean
+    emitter: (ViewScrollChangeEvent) -> Unit
 ) = View.OnScrollChangeListener { v, scrollX, scrollY, oldScrollX, oldScrollY ->
     if (scope.isActive) {
         emitter(ViewScrollChangeEvent(v, scrollX, scrollY, oldScrollX, oldScrollY))

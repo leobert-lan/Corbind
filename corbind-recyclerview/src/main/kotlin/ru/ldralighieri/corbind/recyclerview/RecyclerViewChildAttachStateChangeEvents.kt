@@ -29,8 +29,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.isActive
-import ru.ldralighieri.corbind.corbindReceiveChannel
-import ru.ldralighieri.corbind.offerElement
+import ru.ldralighieri.corbind.internal.corbindReceiveChannel
 
 sealed class RecyclerViewChildAttachStateChangeEvent {
     abstract val view: RecyclerView
@@ -48,7 +47,8 @@ data class RecyclerViewChildDetachEvent(
 ) : RecyclerViewChildAttachStateChangeEvent()
 
 /**
- * Perform an action on  child attach state change events on [RecyclerView].
+ * Perform an action on [child attach state change events][RecyclerViewChildAttachStateChangeEvent]
+ * on [RecyclerView].
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -59,19 +59,21 @@ fun RecyclerView.childAttachStateChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (RecyclerViewChildAttachStateChangeEvent) -> Unit
 ) {
-
-    val events = scope.actor<RecyclerViewChildAttachStateChangeEvent>(Dispatchers.Main, capacity) {
+    val events = scope.actor<RecyclerViewChildAttachStateChangeEvent>(
+        Dispatchers.Main.immediate,
+        capacity
+    ) {
         for (event in channel) action(event)
     }
 
-    val listener = listener(scope = scope, recyclerView = this, emitter = events::offer)
+    val listener = listener(scope, this, events::trySend)
     addOnChildAttachStateChangeListener(listener)
     events.invokeOnClose { removeOnChildAttachStateChangeListener(listener) }
 }
 
 /**
- * Perform an action on  child attach state change events on [RecyclerView] inside new
- * [CoroutineScope].
+ * Perform an action on [child attach state change events][RecyclerViewChildAttachStateChangeEvent]
+ * on [RecyclerView], inside new [CoroutineScope].
  *
  * @param capacity Capacity of the channel's buffer (no buffer by default)
  * @param action An action to perform
@@ -80,19 +82,34 @@ suspend fun RecyclerView.childAttachStateChangeEvents(
     capacity: Int = Channel.RENDEZVOUS,
     action: suspend (RecyclerViewChildAttachStateChangeEvent) -> Unit
 ) = coroutineScope {
-
-    val events = actor<RecyclerViewChildAttachStateChangeEvent>(Dispatchers.Main, capacity) {
-        for (event in channel) action(event)
-    }
-
-    val listener = listener(scope = this, recyclerView = this@childAttachStateChangeEvents,
-            emitter = events::offer)
-    addOnChildAttachStateChangeListener(listener)
-    events.invokeOnClose { removeOnChildAttachStateChangeListener(listener) }
+    childAttachStateChangeEvents(this, capacity, action)
 }
 
 /**
- * Create a channel of child attach state change events on [RecyclerView].
+ * Create a channel of [child attach state change events][RecyclerViewChildAttachStateChangeEvent]
+ * on [RecyclerView].
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * launch {
+ *      recyclerView.childAttachStateChangeEvents(scope)
+ *          .consumeEach { event ->
+ *              when (event) {
+ *                  is RecyclerViewChildAttachEvent -> { /* handle child attach event */ }
+ *                  is RecyclerViewChildDetachEvent -> { /* handle child detach event */ }
+ *              }
+ *          }
+ * }
+ *
+ * // handle one event
+ * launch {
+ *      recyclerView.childAttachStateChangeEvents(scope)
+ *          .filterIsInstance<RecyclerViewChildAttachEvent>()
+ *          .consumeEach { /* handle child attach event */ }
+ * }
+ * ```
  *
  * @param scope Root coroutine scope
  * @param capacity Capacity of the channel's buffer (no buffer by default)
@@ -102,27 +119,48 @@ fun RecyclerView.childAttachStateChangeEvents(
     scope: CoroutineScope,
     capacity: Int = Channel.RENDEZVOUS
 ): ReceiveChannel<RecyclerViewChildAttachStateChangeEvent> = corbindReceiveChannel(capacity) {
-    val listener = listener(scope, this@childAttachStateChangeEvents, ::offerElement)
+    val listener = listener(scope, this@childAttachStateChangeEvents, ::trySend)
     addOnChildAttachStateChangeListener(listener)
     invokeOnClose { removeOnChildAttachStateChangeListener(listener) }
 }
 
 /**
- * Create a flow of child attach state change events on [RecyclerView].
+ * Create a flow of [child attach state change events][RecyclerViewChildAttachStateChangeEvent] on
+ * [RecyclerView].
+ *
+ * Examples:
+ *
+ * ```
+ * // handle all events
+ * recyclerView.childAttachStateChangeEvents()
+ *      .onEach { event ->
+ *          when (event) {
+ *              is RecyclerViewChildAttachEvent -> { /* handle child attach event */ }
+ *              is RecyclerViewChildDetachEvent -> { /* handle child detach event */ }
+ *          }
+ *      }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ *
+ * // handle one event
+ * recyclerView.childAttachStateChangeEvents()
+ *      .filterIsInstance<RecyclerViewChildAttachEvent>()
+ *      .onEach { /* handle child attach event */ }
+ *      .launchIn(lifecycleScope) // lifecycle-runtime-ktx
+ * ```
  */
 @CheckResult
 fun RecyclerView.childAttachStateChangeEvents(): Flow<RecyclerViewChildAttachStateChangeEvent> =
-        channelFlow {
-            val listener = listener(this, this@childAttachStateChangeEvents, ::offer)
-            addOnChildAttachStateChangeListener(listener)
-            awaitClose { removeOnChildAttachStateChangeListener(listener) }
-        }
+    channelFlow {
+        val listener = listener(this, this@childAttachStateChangeEvents, ::trySend)
+        addOnChildAttachStateChangeListener(listener)
+        awaitClose { removeOnChildAttachStateChangeListener(listener) }
+    }
 
 @CheckResult
 private fun listener(
     scope: CoroutineScope,
     recyclerView: RecyclerView,
-    emitter: (RecyclerViewChildAttachStateChangeEvent) -> Boolean
+    emitter: (RecyclerViewChildAttachStateChangeEvent) -> Unit
 ) = object : RecyclerView.OnChildAttachStateChangeListener {
 
     override fun onChildViewAttachedToWindow(childView: View) {
